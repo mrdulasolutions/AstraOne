@@ -23,6 +23,8 @@ const captureBuiltins = require('./tools/builtins/capture.js');
 const openrouterProvider = require('./providers/openrouter.js');
 const anthropicProvider = require('./providers/anthropic.js');
 const { createRouter } = require('./agents/router.js');
+const { createMcpClient } = require('./tools/mcpClient.js');
+const { mergedSpawnEnv } = require('./util/shellEnv.js');
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -39,6 +41,7 @@ let toolRegistry = null;
 let toolPermissions = null;
 let toolAuditLog = null;
 let agentRouter = null;
+let mcpClient = null;
 /** Map<callId, resolve> — pending approval prompts awaiting renderer decision. */
 const pendingApprovals = new Map();
 
@@ -199,6 +202,7 @@ function loadPrefs() {
     j.provider = ['openrouter', 'anthropic'].includes(j.provider) ? j.provider : 'openrouter';
     j.toolPolicies = j.toolPolicies && typeof j.toolPolicies === 'object' ? j.toolPolicies : {};
     j.serverPolicies = j.serverPolicies && typeof j.serverPolicies === 'object' ? j.serverPolicies : {};
+    j.mcpServers = Array.isArray(j.mcpServers) ? j.mcpServers : [];
     return j;
   } catch {
     return {
@@ -209,6 +213,7 @@ function loadPrefs() {
       provider: 'openrouter',
       toolPolicies: {},
       serverPolicies: {},
+      mcpServers: [],
     };
   }
 }
@@ -505,6 +510,27 @@ function initAgentStack() {
     getSessionImage: () => sessionImageBase64,
     getSessionMeta: () => sessionImageMeta,
   });
+
+  mcpClient = createMcpClient({
+    registry: toolRegistry,
+    mergedSpawnEnv,
+    auditLog: toolAuditLog,
+    persistServers: (configs) => {
+      const prefs = loadPrefs();
+      prefs.mcpServers = configs;
+      savePrefs(prefs);
+    },
+    emit: (channel, payload) => emitToRenderer(channel, payload),
+  });
+
+  // Re-hydrate previously configured MCP servers (does NOT auto-connect — user opts in).
+  try {
+    const prefs = loadPrefs();
+    mcpClient.loadConfigs(prefs.mcpServers || []);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[mcp] failed to restore servers from prefs:', err.message);
+  }
 }
 
 function setupIpc() {
@@ -802,6 +828,98 @@ function setupIpc() {
   ipcMain.handle('glass:getProviderKeyPresent', (_e, payload = {}) => {
     const providerId = String(payload.providerId || '');
     return { present: Boolean(getApiKey(providerId)) };
+  });
+
+  // ——— MCP server management ———
+
+  ipcMain.handle('glass:listMcpServers', () => {
+    if (!mcpClient) return { ok: true, servers: [] };
+    return { ok: true, servers: mcpClient.list() };
+  });
+
+  ipcMain.handle('glass:addMcpServer', (_e, payload = {}) => {
+    if (!mcpClient) return { ok: false, error: 'mcp not initialized' };
+    try {
+      const entry = mcpClient.add({
+        id: String(payload.id || ''),
+        type: 'stdio',
+        command: String(payload.command || ''),
+        args: Array.isArray(payload.args) ? payload.args.map(String) : [],
+        env: payload.env && typeof payload.env === 'object' ? payload.env : {},
+        enabled: Boolean(payload.enabled),
+      });
+      return { ok: true, server: entry };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('glass:removeMcpServer', async (_e, payload = {}) => {
+    if (!mcpClient) return { ok: false, error: 'mcp not initialized' };
+    try {
+      const ok = await mcpClient.remove(String(payload.id || ''));
+      return { ok };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('glass:connectMcpServer', async (_e, payload = {}) => {
+    if (!mcpClient) return { ok: false, error: 'mcp not initialized' };
+    try {
+      const r = await mcpClient.connect(String(payload.id || ''));
+      return { ok: true, server: r };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('glass:disconnectMcpServer', async (_e, payload = {}) => {
+    if (!mcpClient) return { ok: false, error: 'mcp not initialized' };
+    try {
+      const ok = await mcpClient.disconnect(String(payload.id || ''));
+      return { ok };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('glass:refreshMcpTools', async (_e, payload = {}) => {
+    if (!mcpClient) return { ok: false, error: 'mcp not initialized' };
+    try {
+      const tools = await mcpClient.refreshTools(String(payload.id || ''));
+      return { ok: true, tools };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('glass:registerMcpTool', (_e, payload = {}) => {
+    if (!mcpClient) return { ok: false, error: 'mcp not initialized' };
+    try {
+      const r = mcpClient.registerTool(
+        String(payload.serverId || ''),
+        String(payload.toolName || ''),
+        payload.effect ? { effect: String(payload.effect) } : {},
+      );
+      return r;
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('glass:unregisterMcpTool', (_e, payload = {}) => {
+    if (!mcpClient) return { ok: false, error: 'mcp not initialized' };
+    const removed = mcpClient.unregisterTool(
+      String(payload.serverId || ''),
+      String(payload.toolName || ''),
+    );
+    return { ok: true, removed };
+  });
+
+  ipcMain.handle('glass:getMcpStderr', (_e, payload = {}) => {
+    if (!mcpClient) return { ok: true, stderr: '' };
+    return { ok: true, stderr: mcpClient.getStderr(String(payload.id || '')) };
   });
 }
 

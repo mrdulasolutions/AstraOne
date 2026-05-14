@@ -46,6 +46,28 @@ contextBridge.exposeInMainWorld('glass', {
     ipcRenderer.on('glass:requestApproval', ch);
     return () => ipcRenderer.removeListener('glass:requestApproval', ch);
   },
+  // —— MCP server management ——
+  listMcpServers: () => ipcRenderer.invoke('glass:listMcpServers'),
+  addMcpServer: (config) => ipcRenderer.invoke('glass:addMcpServer', config),
+  removeMcpServer: (id) => ipcRenderer.invoke('glass:removeMcpServer', { id }),
+  connectMcpServer: (id) => ipcRenderer.invoke('glass:connectMcpServer', { id }),
+  disconnectMcpServer: (id) => ipcRenderer.invoke('glass:disconnectMcpServer', { id }),
+  refreshMcpTools: (id) => ipcRenderer.invoke('glass:refreshMcpTools', { id }),
+  registerMcpTool: ({ serverId, toolName, effect }) =>
+    ipcRenderer.invoke('glass:registerMcpTool', { serverId, toolName, effect }),
+  unregisterMcpTool: ({ serverId, toolName }) =>
+    ipcRenderer.invoke('glass:unregisterMcpTool', { serverId, toolName }),
+  getMcpStderr: (id) => ipcRenderer.invoke('glass:getMcpStderr', { id }),
+  onMcpStatus: (fn) => {
+    const ch = (_e, payload) => fn(payload);
+    ipcRenderer.on('mcp:status', ch);
+    return () => ipcRenderer.removeListener('mcp:status', ch);
+  },
+  onMcpRemoved: (fn) => {
+    const ch = (_e, payload) => fn(payload);
+    ipcRenderer.on('mcp:removed', ch);
+    return () => ipcRenderer.removeListener('mcp:removed', ch);
+  },
   openExternal: (url) => ipcRenderer.invoke('glass:openExternal', { url }),
   resizeToContent: (size) => ipcRenderer.invoke('glass:resizeToContent', size),
   setLayout: (mode) => ipcRenderer.invoke('glass:setLayout', { mode }),

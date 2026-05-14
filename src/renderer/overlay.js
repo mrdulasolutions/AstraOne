@@ -155,6 +155,7 @@ function openSettings() {
   void loadModels(false);
   void loadTools();
   void loadAuditLog();
+  void loadMcpServers();
   void (async () => {
     const k = await window.glass.getElevenLabsKeyPresent();
     if (k.present) loadVoices(false);
@@ -525,6 +526,105 @@ async function loadTools() {
   }).join('');
 }
 
+// ——— MCP server management ———
+
+async function loadMcpServers() {
+  const host = $('mcpServers');
+  if (!host) return;
+  const r = await window.glass.listMcpServers();
+  const servers = (r?.ok && r.servers) || [];
+  if (!servers.length) {
+    host.innerHTML = '<p class="model-hint">No MCP servers configured yet. Add one above to connect to Claude Code, a filesystem MCP, or any other stdio MCP server.</p>';
+    return;
+  }
+  host.innerHTML = servers.map(renderMcpServerCard).join('');
+}
+
+function renderMcpServerCard(s) {
+  const cmd = `${escapeHtml(s.config.command)} ${escapeHtml((s.config.args || []).join(' '))}`.trim();
+  const relWarn = !s.isAbsoluteCommand
+    ? `<div class="mcp-server-warn">⚠ Command is not an absolute path — on packaged builds this may fail to resolve. Prefer the full path (e.g. /usr/local/bin/npx).</div>`
+    : '';
+  const errBlock = s.lastError
+    ? `<div class="mcp-server-error">${escapeHtml(s.lastError)}</div>`
+    : '';
+  const isConnected = s.status === 'connected';
+  const isConnecting = s.status === 'connecting';
+  const cardClass =
+    isConnected ? 'is-connected'
+    : isConnecting ? 'is-connecting'
+    : s.status === 'error' ? 'is-error'
+    : '';
+  const connectBtn = isConnected
+    ? `<button type="button" class="pill-btn" data-mcp-action="disconnect" data-id="${escapeHtml(s.id)}">Disconnect</button>`
+    : `<button type="button" class="pill-btn pill-btn-primary" data-mcp-action="connect" data-id="${escapeHtml(s.id)}" ${isConnecting ? 'disabled' : ''}>Connect</button>`;
+  const refreshBtn = isConnected
+    ? `<button type="button" class="pill-btn" data-mcp-action="refresh" data-id="${escapeHtml(s.id)}">↻ Refresh tools</button>`
+    : '';
+  const toolsBlock = isConnected
+    ? renderMcpToolList(s)
+    : '';
+  return `<div class="mcp-server-card ${cardClass}" data-id="${escapeHtml(s.id)}">
+    <div class="mcp-server-head">
+      <span class="mcp-server-id">${escapeHtml(s.id)}</span>
+      <span class="mcp-server-status" data-status="${escapeHtml(s.status)}">${escapeHtml(s.status)}</span>
+    </div>
+    <div class="mcp-server-cmd">${cmd}</div>
+    ${relWarn}
+    ${errBlock}
+    <div class="mcp-server-actions">
+      ${connectBtn}
+      ${refreshBtn}
+      <button type="button" class="pill-btn pill-btn-danger" data-mcp-action="remove" data-id="${escapeHtml(s.id)}">Remove</button>
+    </div>
+    ${toolsBlock}
+  </div>`;
+}
+
+function renderMcpToolList(s) {
+  const tools = s.discoveredTools || [];
+  if (!tools.length) return '<p class="model-hint">No tools discovered.</p>';
+  const rows = tools.map((t) => renderMcpToolRow(s.id, t)).join('');
+  return `<ul class="mcp-tool-list">${rows}</ul>`;
+}
+
+function renderMcpToolRow(serverId, t) {
+  const effectBadge = `<span class="tool-effect" data-effect="${escapeHtml(t.effect)}">${escapeHtml(t.effect)}</span>`;
+  const action = t.registered
+    ? `<button type="button" class="pill-btn" data-mcp-action="unregister" data-server="${escapeHtml(serverId)}" data-tool="${escapeHtml(t.name)}">Unregister</button>`
+    : `<button type="button" class="pill-btn pill-btn-primary" data-mcp-action="register" data-server="${escapeHtml(serverId)}" data-tool="${escapeHtml(t.name)}">Add to registry</button>`;
+  const warnings = (t.warnings || []).slice(0, 6).map((w) =>
+    `<span class="badge" data-severity="${escapeHtml(w.severity)}" title="${escapeHtml(w.message)}">${escapeHtml(w.kind)}</span>`
+  ).join('');
+  const desc = t.description ? `<div class="mcp-tool-desc">${escapeHtml(t.description)}</div>` : '';
+  return `<li class="mcp-tool-row">
+    <div class="mcp-tool-row-head">
+      <span class="mcp-tool-name">${escapeHtml(t.name)}</span>
+      ${effectBadge}
+      ${action}
+    </div>
+    ${desc}
+    ${warnings ? `<div class="mcp-tool-warnings">${warnings}</div>` : ''}
+  </li>`;
+}
+
+function parseMcpForm() {
+  const id = ($('mcpAddId')?.value || '').trim();
+  const command = ($('mcpAddCommand')?.value || '').trim();
+  const args = ($('mcpAddArgs')?.value || '')
+    .split('\n').map((l) => l.trim()).filter(Boolean);
+  const envLines = ($('mcpAddEnv')?.value || '').split('\n');
+  const env = {};
+  for (const line of envLines) {
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const k = line.slice(0, eq).trim();
+    const v = line.slice(eq + 1);
+    if (k) env[k] = v;
+  }
+  return { id, type: 'stdio', command, args, env, enabled: false };
+}
+
 async function loadAuditLog() {
   const list = $('auditList');
   if (!list) return;
@@ -803,6 +903,74 @@ function wire() {
     const policy = t.value || null;
     await window.glass.setToolPolicy({ toolId: id, policy });
   });
+
+  // ——— MCP server settings ———
+
+  $('btnMcpAdd')?.addEventListener('click', async () => {
+    const cfg = parseMcpForm();
+    if (!cfg.id || !cfg.command) {
+      setReply('MCP server needs an id and a command.');
+      return;
+    }
+    const r = await window.glass.addMcpServer(cfg);
+    if (!r?.ok) {
+      setReply(r?.error || 'Could not add server');
+      return;
+    }
+    $('mcpAddId').value = '';
+    $('mcpAddCommand').value = '';
+    $('mcpAddArgs').value = '';
+    $('mcpAddEnv').value = '';
+    $('mcpAddForm').open = false;
+    setReply(`Added MCP server "${cfg.id}".`);
+    await loadMcpServers();
+    await loadTools();
+  });
+
+  $('mcpServers')?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-mcp-action]');
+    if (!btn) return;
+    const action = btn.dataset.mcpAction;
+    const id = btn.dataset.id;
+    const serverId = btn.dataset.server;
+    const toolName = btn.dataset.tool;
+    btn.disabled = true;
+    try {
+      if (action === 'connect') {
+        setReply(`Connecting to ${id}…`);
+        const r = await window.glass.connectMcpServer(id);
+        if (!r?.ok) setReply(`Connect failed: ${r?.error || 'unknown error'}`);
+        else setReply(`Connected to ${id}.`);
+      } else if (action === 'disconnect') {
+        await window.glass.disconnectMcpServer(id);
+        setReply(`Disconnected ${id}.`);
+      } else if (action === 'refresh') {
+        const r = await window.glass.refreshMcpTools(id);
+        if (!r?.ok) setReply(`Refresh failed: ${r?.error || ''}`);
+        else setReply(`Refreshed tools for ${id}.`);
+      } else if (action === 'remove') {
+        if (!confirm(`Remove MCP server "${id}"? Any registered tools from this server will be removed too.`)) return;
+        await window.glass.removeMcpServer(id);
+        setReply(`Removed ${id}.`);
+      } else if (action === 'register') {
+        const r = await window.glass.registerMcpTool({ serverId, toolName });
+        if (!r?.ok) setReply(`Register failed: ${r?.error || ''}`);
+        else setReply(r.alreadyRegistered ? `${toolName} already registered.` : `Registered ${toolName}.`);
+        await loadTools();
+      } else if (action === 'unregister') {
+        await window.glass.unregisterMcpTool({ serverId, toolName });
+        setReply(`Unregistered ${toolName}.`);
+        await loadTools();
+      }
+      await loadMcpServers();
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Auto-refresh server list on status events so connection states stay live.
+  window.glass.onMcpStatus?.(() => { void loadMcpServers(); });
+  window.glass.onMcpRemoved?.(() => { void loadMcpServers(); });
 
   const opacitySlider = $('pillOpacity');
   if (opacitySlider) {

@@ -173,6 +173,38 @@
 
         <div class="settings-section">
           <div class="settings-section-head">
+            <h2 class="settings-section-title">MCP Servers</h2>
+            <p class="settings-section-sub">
+              Connect stdio MCP servers (Claude Code, filesystem, sqlite, etc.) to expose their tools to the agent. Tools are <strong>not</strong> auto-registered — pick the ones you want from each server's discovered list.
+            </p>
+          </div>
+          <details class="mcp-add-form" id="mcpAddForm">
+            <summary>＋ Add MCP server</summary>
+            <div class="mcp-form-grid">
+              <label class="field">
+                <span>id</span>
+                <input type="text" id="mcpAddId" placeholder="filesystem" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field">
+                <span>command (absolute path recommended)</span>
+                <input type="text" id="mcpAddCommand" placeholder="/usr/local/bin/npx" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field">
+                <span>args (one per line)</span>
+                <textarea id="mcpAddArgs" rows="3" spellcheck="false" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;/Users/you/repo"></textarea>
+              </label>
+              <label class="field">
+                <span>env overrides (KEY=value per line, optional)</span>
+                <textarea id="mcpAddEnv" rows="2" spellcheck="false" placeholder="SOME_TOKEN=abc"></textarea>
+              </label>
+              <button type="button" class="pill-btn pill-btn-primary wide" id="btnMcpAdd">Add server</button>
+            </div>
+          </details>
+          <div class="mcp-servers" id="mcpServers"></div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-head">
             <h2 class="settings-section-title">ElevenLabs · Voice</h2>
             <p class="settings-section-sub">
               Microphone transcription (Scribe) and spoken answers (Flash v2.5). Get a key at

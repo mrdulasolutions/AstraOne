@@ -178,16 +178,38 @@
               Connect stdio MCP servers (Claude Code, filesystem, sqlite, etc.) to expose their tools to the agent. Tools are <strong>not</strong> auto-registered — pick the ones you want from each server's discovered list.
             </p>
           </div>
-          <details class="mcp-add-form" id="mcpAddForm">
-            <summary>＋ Add MCP server</summary>
+          <details class="mcp-add-form" id="mcpAddRemoteForm" open>
+            <summary>＋ Connect to a remote MCP server (URL + auth)</summary>
             <div class="mcp-form-grid">
               <label class="field">
-                <span>id</span>
+                <span>id (short label, no spaces)</span>
+                <input type="text" id="mcpRemoteId" placeholder="github" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field">
+                <span>URL</span>
+                <input type="text" id="mcpRemoteUrl" placeholder="https://api.example.com/mcp" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field">
+                <span>Bearer token (optional — encrypted at rest)</span>
+                <input type="password" id="mcpRemoteBearer" placeholder="pat / api key / oauth token" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Additional headers (HEADER: value per line, optional)</span>
+                <textarea id="mcpRemoteHeaders" rows="2" spellcheck="false" placeholder="X-Org-Id: 12345"></textarea>
+              </label>
+              <button type="button" class="pill-btn pill-btn-primary wide" id="btnMcpAddRemote">Add remote server</button>
+            </div>
+          </details>
+          <details class="mcp-add-form" id="mcpAddLocalForm">
+            <summary>＋ Add local MCP server (stdio — advanced)</summary>
+            <div class="mcp-form-grid">
+              <label class="field">
+                <span>id (short label, no spaces)</span>
                 <input type="text" id="mcpAddId" placeholder="filesystem" autocomplete="off" spellcheck="false" />
               </label>
               <label class="field">
                 <span>command (absolute path recommended)</span>
-                <input type="text" id="mcpAddCommand" placeholder="/usr/local/bin/npx" autocomplete="off" spellcheck="false" />
+                <input type="text" id="mcpAddCommand" placeholder="/opt/homebrew/bin/npx" autocomplete="off" spellcheck="false" />
               </label>
               <label class="field">
                 <span>args (one per line)</span>
@@ -197,7 +219,7 @@
                 <span>env overrides (KEY=value per line, optional)</span>
                 <textarea id="mcpAddEnv" rows="2" spellcheck="false" placeholder="SOME_TOKEN=abc"></textarea>
               </label>
-              <button type="button" class="pill-btn pill-btn-primary wide" id="btnMcpAdd">Add server</button>
+              <button type="button" class="pill-btn pill-btn-primary wide" id="btnMcpAdd">Add local server</button>
             </div>
           </details>
           <div class="mcp-servers" id="mcpServers"></div>

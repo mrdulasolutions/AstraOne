@@ -33,6 +33,8 @@ const { inferEffect, lintSchema } = require('./schemaLinter.js');
 const VALID_ID_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 const MAX_STDERR_BYTES = 5 * 1024;
 
+const SUPPORTED_TYPES = new Set(['stdio', 'http']);
+
 function createMcpClient(deps = {}) {
   const {
     registry,
@@ -60,17 +62,29 @@ function createMcpClient(deps = {}) {
     if (typeof cfg.id !== 'string' || !VALID_ID_RE.test(cfg.id)) {
       throw new Error('id must match [A-Za-z][A-Za-z0-9_-]* (no dots/spaces/slashes)');
     }
-    if (cfg.type !== 'stdio') {
-      throw new Error('only type:"stdio" is supported in this build');
+    if (!SUPPORTED_TYPES.has(cfg.type)) {
+      throw new Error(`type must be one of: ${[...SUPPORTED_TYPES].join(', ')}`);
     }
-    if (typeof cfg.command !== 'string' || !cfg.command.trim()) {
-      throw new Error('command (string) is required');
-    }
-    if (cfg.args != null && !Array.isArray(cfg.args)) {
-      throw new TypeError('args must be an array of strings');
-    }
-    if (cfg.env != null && (typeof cfg.env !== 'object' || Array.isArray(cfg.env))) {
-      throw new TypeError('env must be an object of string→string');
+    if (cfg.type === 'stdio') {
+      if (typeof cfg.command !== 'string' || !cfg.command.trim()) {
+        throw new Error('command (string) is required for stdio servers');
+      }
+      if (cfg.args != null && !Array.isArray(cfg.args)) {
+        throw new TypeError('args must be an array of strings');
+      }
+      if (cfg.env != null && (typeof cfg.env !== 'object' || Array.isArray(cfg.env))) {
+        throw new TypeError('env must be an object of string→string');
+      }
+    } else if (cfg.type === 'http') {
+      if (typeof cfg.url !== 'string' || !/^https?:\/\//i.test(cfg.url)) {
+        throw new Error('url (http:// or https://) is required for http servers');
+      }
+      if (cfg.headers != null && (typeof cfg.headers !== 'object' || Array.isArray(cfg.headers))) {
+        throw new TypeError('headers must be an object of string→string');
+      }
+      if (cfg.bearerToken != null && typeof cfg.bearerToken !== 'string') {
+        throw new TypeError('bearerToken must be a string');
+      }
     }
   }
 
@@ -78,17 +92,29 @@ function createMcpClient(deps = {}) {
     validateConfig(config);
     if (servers.has(config.id)) throw new Error(`server "${config.id}" already exists`);
 
-    const entry = {
-      id: config.id,
-      config: {
+    const stored = config.type === 'stdio'
+      ? {
         id: config.id,
         type: 'stdio',
         command: String(config.command).trim(),
         args: Array.isArray(config.args) ? config.args.map(String) : [],
         env: config.env && typeof config.env === 'object' ? { ...config.env } : {},
         enabled: Boolean(config.enabled),
-        autoRegister: false, // honored in PR-C; ignored here.
-      },
+        autoRegister: false,
+      }
+      : {
+        id: config.id,
+        type: 'http',
+        url: String(config.url).trim(),
+        headers: config.headers && typeof config.headers === 'object' ? { ...config.headers } : {},
+        bearerToken: config.bearerToken ? String(config.bearerToken) : '',
+        enabled: Boolean(config.enabled),
+        autoRegister: false,
+      };
+
+    const entry = {
+      id: config.id,
+      config: stored,
       status: 'disconnected',
       lastError: null,
       client: null,
@@ -127,9 +153,18 @@ function createMcpClient(deps = {}) {
   }
 
   function serialize(e) {
+    const cfg = { ...e.config };
+    // Never leak the plaintext bearer token to the renderer; expose a presence flag.
+    let hasBearerToken = false;
+    if (cfg.bearerToken) {
+      hasBearerToken = true;
+      delete cfg.bearerToken;
+    }
     return {
       id: e.id,
-      config: { ...e.config },
+      type: e.config.type,
+      config: cfg,
+      hasBearerToken,
       status: e.status,
       lastError: e.lastError,
       discoveredTools: e.discoveredTools.map((t) => ({
@@ -140,7 +175,7 @@ function createMcpClient(deps = {}) {
         warnings: t.warnings,
         registered: registry.get(`mcp.${e.id}.${t.name}`) != null,
       })),
-      isAbsoluteCommand: path.isAbsolute(e.config.command),
+      isAbsoluteCommand: e.config.type === 'stdio' ? path.isAbsolute(e.config.command) : null,
     };
   }
 
@@ -173,7 +208,7 @@ function createMcpClient(deps = {}) {
 
     let sdk;
     try {
-      sdk = await loadSdk();
+      sdk = await loadSdk(entry.config.type);
     } catch (err) {
       entry.status = 'error';
       entry.lastError = `SDK load failed: ${err.message}`;
@@ -181,22 +216,29 @@ function createMcpClient(deps = {}) {
       throw err;
     }
 
-    const { Client, StdioClientTransport } = sdk;
+    const { Client } = sdk;
 
-    let stderrSink;
     try {
-      const env = mergedSpawnEnv(entry.config.env || {});
-      entry.transport = new StdioClientTransport({
-        command: entry.config.command,
-        args: entry.config.args.slice(),
-        env,
-        stderr: 'pipe',
-      });
-
-      // The SDK gives us a stderr stream we can subscribe to.
-      stderrSink = entry.transport.stderr;
-      if (stderrSink && typeof stderrSink.on === 'function') {
-        stderrSink.on('data', (chunk) => appendStderr(entry, chunk));
+      if (entry.config.type === 'stdio') {
+        const env = mergedSpawnEnv(entry.config.env || {});
+        entry.transport = new sdk.StdioClientTransport({
+          command: entry.config.command,
+          args: entry.config.args.slice(),
+          env,
+          stderr: 'pipe',
+        });
+        const stderrSink = entry.transport.stderr;
+        if (stderrSink && typeof stderrSink.on === 'function') {
+          stderrSink.on('data', (chunk) => appendStderr(entry, chunk));
+        }
+      } else if (entry.config.type === 'http') {
+        const headers = buildHttpHeaders(entry.config);
+        entry.transport = new sdk.StreamableHTTPClientTransport(
+          new URL(entry.config.url),
+          { requestInit: { headers } },
+        );
+      } else {
+        throw new Error(`unsupported transport: ${entry.config.type}`);
       }
 
       entry.client = new Client(
@@ -221,6 +263,19 @@ function createMcpClient(deps = {}) {
       emitStatus(entry);
       throw err;
     }
+  }
+
+  function buildHttpHeaders(cfg) {
+    const out = {};
+    // user-provided custom headers first
+    for (const [k, v] of Object.entries(cfg.headers || {})) {
+      if (typeof v === 'string') out[String(k)] = v;
+    }
+    // bearer token wins over any user-supplied Authorization header
+    if (cfg.bearerToken) {
+      out['Authorization'] = `Bearer ${cfg.bearerToken}`;
+    }
+    return out;
   }
 
   async function disconnect(id) {
@@ -370,10 +425,18 @@ function createMcpClient(deps = {}) {
   };
 }
 
-async function defaultLoadSdk() {
+async function defaultLoadSdk(type) {
   const clientMod = await import('@modelcontextprotocol/sdk/client/index.js');
-  const stdioMod = await import('@modelcontextprotocol/sdk/client/stdio.js');
-  return { Client: clientMod.Client, StdioClientTransport: stdioMod.StdioClientTransport };
+  const out = { Client: clientMod.Client };
+  if (type === 'stdio' || type === undefined) {
+    const stdioMod = await import('@modelcontextprotocol/sdk/client/stdio.js');
+    out.StdioClientTransport = stdioMod.StdioClientTransport;
+  }
+  if (type === 'http' || type === undefined) {
+    const httpMod = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+    out.StreamableHTTPClientTransport = httpMod.StreamableHTTPClientTransport;
+  }
+  return out;
 }
 
 module.exports = {

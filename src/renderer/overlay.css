@@ -307,9 +307,35 @@ body {
   font-family: ui-monospace, monospace;
   font-size: 11px;
   color: rgba(255, 255, 255, 0.6);
-  margin: 4px 0 8px;
+  margin: 4px 0 4px;
   word-break: break-all;
 }
+
+.mcp-server-meta {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 0 0 6px;
+}
+
+.mcp-server-meta code {
+  font-family: ui-monospace, monospace;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.mcp-transport-badge {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.76);
+}
+
+.mcp-transport-badge[data-t='http']  { background: rgba(99, 102, 241, 0.28); color: #c7d2fe; }
+.mcp-transport-badge[data-t='stdio'] { background: rgba(165, 180, 252, 0.18); color: rgba(255, 255, 255, 0.85); }
 
 .mcp-server-warn {
   font-size: 11px;

@@ -49,6 +49,8 @@ contextBridge.exposeInMainWorld('glass', {
   // —— MCP server management ——
   listMcpServers: () => ipcRenderer.invoke('glass:listMcpServers'),
   addMcpServer: (config) => ipcRenderer.invoke('glass:addMcpServer', config),
+  updateMcpServerAuth: ({ id, headers, bearerToken }) =>
+    ipcRenderer.invoke('glass:updateMcpServerAuth', { id, headers, bearerToken }),
   removeMcpServer: (id) => ipcRenderer.invoke('glass:removeMcpServer', { id }),
   connectMcpServer: (id) => ipcRenderer.invoke('glass:connectMcpServer', { id }),
   disconnectMcpServer: (id) => ipcRenderer.invoke('glass:disconnectMcpServer', { id }),

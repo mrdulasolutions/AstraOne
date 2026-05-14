@@ -517,7 +517,7 @@ function initAgentStack() {
     auditLog: toolAuditLog,
     persistServers: (configs) => {
       const prefs = loadPrefs();
-      prefs.mcpServers = configs;
+      prefs.mcpServers = configs.map(persistableMcpConfig);
       savePrefs(prefs);
     },
     emit: (channel, payload) => emitToRenderer(channel, payload),
@@ -526,11 +526,38 @@ function initAgentStack() {
   // Re-hydrate previously configured MCP servers (does NOT auto-connect — user opts in).
   try {
     const prefs = loadPrefs();
-    mcpClient.loadConfigs(prefs.mcpServers || []);
+    const hydrated = (prefs.mcpServers || []).map(hydratedMcpConfig);
+    mcpClient.loadConfigs(hydrated);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn('[mcp] failed to restore servers from prefs:', err.message);
   }
+}
+
+/**
+ * Strip plaintext bearer tokens out of an MCP config before writing to prefs.json.
+ * Encrypts them via the same safeStorage path used for provider API keys.
+ */
+function persistableMcpConfig(cfg) {
+  if (!cfg || cfg.type !== 'http' || !cfg.bearerToken) {
+    // Drop bearerToken (always plaintext-only in-memory) in case it slipped through.
+    if (cfg && cfg.bearerToken === '') {
+      const { bearerToken: _drop, ...rest } = cfg;
+      return rest;
+    }
+    return cfg;
+  }
+  const { bearerToken, ...rest } = cfg;
+  return { ...rest, bearerToken_enc: encryptKey(bearerToken) };
+}
+
+/**
+ * Reverse: decrypt `bearerToken_enc` → in-memory `bearerToken` when restoring from prefs.
+ */
+function hydratedMcpConfig(stored) {
+  if (!stored || stored.type !== 'http' || !stored.bearerToken_enc) return { ...stored };
+  const { bearerToken_enc, ...rest } = stored;
+  return { ...rest, bearerToken: decryptKey(bearerToken_enc) };
 }
 
 function setupIpc() {
@@ -839,19 +866,44 @@ function setupIpc() {
 
   ipcMain.handle('glass:addMcpServer', (_e, payload = {}) => {
     if (!mcpClient) return { ok: false, error: 'mcp not initialized' };
+    const type = payload?.type === 'http' ? 'http' : 'stdio';
+    const cfg = { id: String(payload.id || ''), type, enabled: Boolean(payload.enabled) };
+    if (type === 'stdio') {
+      cfg.command = String(payload.command || '');
+      cfg.args = Array.isArray(payload.args) ? payload.args.map(String) : [];
+      cfg.env = payload.env && typeof payload.env === 'object' ? payload.env : {};
+    } else {
+      cfg.url = String(payload.url || '');
+      cfg.headers = payload.headers && typeof payload.headers === 'object' ? payload.headers : {};
+      cfg.bearerToken = payload.bearerToken ? String(payload.bearerToken) : '';
+    }
     try {
-      const entry = mcpClient.add({
-        id: String(payload.id || ''),
-        type: 'stdio',
-        command: String(payload.command || ''),
-        args: Array.isArray(payload.args) ? payload.args.map(String) : [],
-        env: payload.env && typeof payload.env === 'object' ? payload.env : {},
-        enabled: Boolean(payload.enabled),
-      });
+      const entry = mcpClient.add(cfg);
       return { ok: true, server: entry };
     } catch (err) {
       return { ok: false, error: err.message || String(err) };
     }
+  });
+
+  ipcMain.handle('glass:updateMcpServerAuth', (_e, payload = {}) => {
+    if (!mcpClient) return { ok: false, error: 'mcp not initialized' };
+    const id = String(payload.id || '');
+    const entry = mcpClient._internal.servers.get(id);
+    if (!entry) return { ok: false, error: 'unknown server' };
+    if (entry.config.type !== 'http') return { ok: false, error: 'auth update only valid for http servers' };
+    // Update headers/bearerToken in memory and re-persist.
+    if (payload.headers && typeof payload.headers === 'object') {
+      entry.config.headers = { ...payload.headers };
+    }
+    if (typeof payload.bearerToken === 'string') {
+      entry.config.bearerToken = payload.bearerToken;
+    }
+    // Trigger persistence by simulating the same callback path:
+    const prefs = loadPrefs();
+    prefs.mcpServers = [...mcpClient._internal.servers.values()]
+      .map((e) => persistableMcpConfig(e.config));
+    savePrefs(prefs);
+    return { ok: true };
   });
 
   ipcMain.handle('glass:removeMcpServer', async (_e, payload = {}) => {

@@ -541,13 +541,7 @@ async function loadMcpServers() {
 }
 
 function renderMcpServerCard(s) {
-  const cmd = `${escapeHtml(s.config.command)} ${escapeHtml((s.config.args || []).join(' '))}`.trim();
-  const relWarn = !s.isAbsoluteCommand
-    ? `<div class="mcp-server-warn">⚠ Command is not an absolute path — on packaged builds this may fail to resolve. Prefer the full path (e.g. /usr/local/bin/npx).</div>`
-    : '';
-  const errBlock = s.lastError
-    ? `<div class="mcp-server-error">${escapeHtml(s.lastError)}</div>`
-    : '';
+  const isHttp = s.type === 'http';
   const isConnected = s.status === 'connected';
   const isConnecting = s.status === 'connecting';
   const cardClass =
@@ -555,22 +549,54 @@ function renderMcpServerCard(s) {
     : isConnecting ? 'is-connecting'
     : s.status === 'error' ? 'is-error'
     : '';
+
+  // Body lines differ per transport.
+  let body = '';
+  let warn = '';
+  if (isHttp) {
+    body = `<div class="mcp-server-cmd">${escapeHtml(s.config.url || '')}</div>`;
+    const authLine = s.hasBearerToken
+      ? `<div class="mcp-server-meta">🔒 Authorization: Bearer <code>•••••</code> · <button type="button" class="link-btn" data-mcp-action="edit-auth" data-id="${escapeHtml(s.id)}">edit</button></div>`
+      : `<div class="mcp-server-meta">No auth header set · <button type="button" class="link-btn" data-mcp-action="edit-auth" data-id="${escapeHtml(s.id)}">add bearer token</button></div>`;
+    body += authLine;
+    // additional headers (non-Authorization) summarized
+    const headerKeys = Object.keys(s.config.headers || {}).filter((k) => k.toLowerCase() !== 'authorization');
+    if (headerKeys.length) {
+      body += `<div class="mcp-server-meta">Headers: ${headerKeys.map(escapeHtml).join(', ')}</div>`;
+    }
+    if (!/^https:/i.test(s.config.url || '')) {
+      warn = `<div class="mcp-server-warn">⚠ URL is not HTTPS — traffic + bearer token will travel in plaintext.</div>`;
+    }
+  } else {
+    const cmd = `${escapeHtml(s.config.command || '')} ${escapeHtml((s.config.args || []).join(' '))}`.trim();
+    body = `<div class="mcp-server-cmd">${cmd}</div>`;
+    if (s.isAbsoluteCommand === false) {
+      warn = `<div class="mcp-server-warn">⚠ Command is not an absolute path — packaged builds may not resolve it. Prefer the full path (e.g. /opt/homebrew/bin/npx).</div>`;
+    }
+  }
+
+  const errBlock = s.lastError
+    ? `<div class="mcp-server-error">${escapeHtml(s.lastError)}</div>`
+    : '';
   const connectBtn = isConnected
     ? `<button type="button" class="pill-btn" data-mcp-action="disconnect" data-id="${escapeHtml(s.id)}">Disconnect</button>`
     : `<button type="button" class="pill-btn pill-btn-primary" data-mcp-action="connect" data-id="${escapeHtml(s.id)}" ${isConnecting ? 'disabled' : ''}>Connect</button>`;
   const refreshBtn = isConnected
     ? `<button type="button" class="pill-btn" data-mcp-action="refresh" data-id="${escapeHtml(s.id)}">↻ Refresh tools</button>`
     : '';
-  const toolsBlock = isConnected
-    ? renderMcpToolList(s)
-    : '';
+  const toolsBlock = isConnected ? renderMcpToolList(s) : '';
+  const transportBadge = isHttp
+    ? '<span class="mcp-transport-badge" data-t="http">HTTP</span>'
+    : '<span class="mcp-transport-badge" data-t="stdio">stdio</span>';
+
   return `<div class="mcp-server-card ${cardClass}" data-id="${escapeHtml(s.id)}">
     <div class="mcp-server-head">
       <span class="mcp-server-id">${escapeHtml(s.id)}</span>
+      ${transportBadge}
       <span class="mcp-server-status" data-status="${escapeHtml(s.status)}">${escapeHtml(s.status)}</span>
     </div>
-    <div class="mcp-server-cmd">${cmd}</div>
-    ${relWarn}
+    ${body}
+    ${warn}
     ${errBlock}
     <div class="mcp-server-actions">
       ${connectBtn}
@@ -606,6 +632,22 @@ function renderMcpToolRow(serverId, t) {
     ${desc}
     ${warnings ? `<div class="mcp-tool-warnings">${warnings}</div>` : ''}
   </li>`;
+}
+
+function parseRemoteMcpForm() {
+  const id = ($('mcpRemoteId')?.value || '').trim();
+  const url = ($('mcpRemoteUrl')?.value || '').trim();
+  const bearerToken = ($('mcpRemoteBearer')?.value || '').trim();
+  const headerLines = ($('mcpRemoteHeaders')?.value || '').split('\n');
+  const headers = {};
+  for (const line of headerLines) {
+    const colon = line.indexOf(':');
+    if (colon <= 0) continue;
+    const k = line.slice(0, colon).trim();
+    const v = line.slice(colon + 1).trim();
+    if (k && k.toLowerCase() !== 'authorization') headers[k] = v;
+  }
+  return { id, type: 'http', url, bearerToken, headers, enabled: false };
 }
 
 function parseMcpForm() {
@@ -909,7 +951,7 @@ function wire() {
   $('btnMcpAdd')?.addEventListener('click', async () => {
     const cfg = parseMcpForm();
     if (!cfg.id || !cfg.command) {
-      setReply('MCP server needs an id and a command.');
+      setReply('Local MCP server needs an id and a command.');
       return;
     }
     const r = await window.glass.addMcpServer(cfg);
@@ -921,8 +963,28 @@ function wire() {
     $('mcpAddCommand').value = '';
     $('mcpAddArgs').value = '';
     $('mcpAddEnv').value = '';
-    $('mcpAddForm').open = false;
-    setReply(`Added MCP server "${cfg.id}".`);
+    $('mcpAddLocalForm').open = false;
+    setReply(`Added local MCP server "${cfg.id}".`);
+    await loadMcpServers();
+    await loadTools();
+  });
+
+  $('btnMcpAddRemote')?.addEventListener('click', async () => {
+    const cfg = parseRemoteMcpForm();
+    if (!cfg.id || !cfg.url) {
+      setReply('Remote MCP server needs an id and a URL.');
+      return;
+    }
+    const r = await window.glass.addMcpServer(cfg);
+    if (!r?.ok) {
+      setReply(r?.error || 'Could not add server');
+      return;
+    }
+    $('mcpRemoteId').value = '';
+    $('mcpRemoteUrl').value = '';
+    $('mcpRemoteBearer').value = '';
+    $('mcpRemoteHeaders').value = '';
+    setReply(`Added remote MCP server "${cfg.id}".`);
     await loadMcpServers();
     await loadTools();
   });
@@ -961,6 +1023,15 @@ function wire() {
         await window.glass.unregisterMcpTool({ serverId, toolName });
         setReply(`Unregistered ${toolName}.`);
         await loadTools();
+      } else if (action === 'edit-auth') {
+        const value = window.prompt(
+          `Bearer token for "${id}" (leave blank to clear). Stored encrypted at rest.`,
+          '',
+        );
+        if (value === null) return; // user cancelled
+        const r = await window.glass.updateMcpServerAuth({ id, bearerToken: value });
+        if (r?.ok) setReply(value ? `Updated bearer token for ${id}.` : `Cleared bearer token for ${id}.`);
+        else setReply(r?.error || 'Could not update auth');
       }
       await loadMcpServers();
     } finally {

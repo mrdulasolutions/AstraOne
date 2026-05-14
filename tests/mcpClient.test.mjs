@@ -70,11 +70,11 @@ function freshSetup(sdkOpts) {
   return { registry, client, events, persisted, mock };
 }
 
-test('mcpClient: add validates config', () => {
+test('mcpClient: add validates stdio config', () => {
   const { client } = freshSetup();
   assert.throws(() => client.add({ id: '', type: 'stdio', command: 'x' }), /id/);
   assert.throws(() => client.add({ id: 'bad id', type: 'stdio', command: 'x' }), /id/);
-  assert.throws(() => client.add({ id: 'ok', type: 'http', command: 'x' }), /stdio/);
+  assert.throws(() => client.add({ id: 'ok', type: 'rogue', command: 'x' }), /type/);
   assert.throws(() => client.add({ id: 'ok', type: 'stdio' }), /command/);
   assert.throws(() => client.add({ id: 'ok', type: 'stdio', command: 'x', args: 'not array' }), /args/);
   assert.throws(() => client.add({ id: 'ok', type: 'stdio', command: 'x', env: 'no' }), /env/);
@@ -244,4 +244,124 @@ test('mcpClient: getStderr returns captured chunks', async () => {
   const captured = client.getStderr('s');
   assert.match(captured, /stderr line 1/);
   assert.match(captured, /stderr line 2/);
+});
+
+// ——— HTTP transport ———
+
+function makeHttpMockSdk({ failConnect = false, toolsList = [] } = {}) {
+  let lastTransport = null;
+  class StreamableHTTPClientTransport {
+    constructor(url, opts) {
+      this.url = url;
+      this.opts = opts;
+      lastTransport = this;
+    }
+    async close() { this.closed = true; }
+  }
+  class Client {
+    constructor(info) { this.info = info; }
+    async connect(t) { this.transport = t; if (failConnect) throw new Error('http connect failed'); }
+    async listTools() { return { tools: toolsList }; }
+    async callTool() { return { content: [] }; }
+    async close() { this.closed = true; }
+  }
+  return {
+    sdk: { Client, StreamableHTTPClientTransport },
+    introspect: { getLastTransport: () => lastTransport },
+  };
+}
+
+test('mcpClient: rejects http config with bad url', () => {
+  const { createRegistry } = require('../src/main/tools/registry.js');
+  const { createMcpClient } = require('../src/main/tools/mcpClient.js');
+  const client = createMcpClient({
+    registry: createRegistry(),
+    loadSdk: async () => ({}),
+  });
+  assert.throws(() => client.add({ id: 'r', type: 'http' }), /url/);
+  assert.throws(() => client.add({ id: 'r', type: 'http', url: 'ftp://x' }), /https?/);
+});
+
+test('mcpClient: rejects http config with non-object headers', () => {
+  const { createRegistry } = require('../src/main/tools/registry.js');
+  const { createMcpClient } = require('../src/main/tools/mcpClient.js');
+  const client = createMcpClient({ registry: createRegistry(), loadSdk: async () => ({}) });
+  assert.throws(
+    () => client.add({ id: 'r', type: 'http', url: 'https://x/mcp', headers: 'no' }),
+    /headers/,
+  );
+});
+
+test('mcpClient: http add → serialize hides bearerToken, exposes presence flag', () => {
+  const { createRegistry } = require('../src/main/tools/registry.js');
+  const { createMcpClient } = require('../src/main/tools/mcpClient.js');
+  const client = createMcpClient({ registry: createRegistry(), loadSdk: async () => ({}) });
+  const out = client.add({
+    id: 'gh',
+    type: 'http',
+    url: 'https://api.example.com/mcp',
+    bearerToken: 'super-secret',
+    headers: { 'X-Org': '1' },
+  });
+  assert.strictEqual(out.type, 'http');
+  assert.strictEqual(out.hasBearerToken, true);
+  assert.strictEqual(out.config.bearerToken, undefined, 'bearerToken must not leak to renderer');
+  assert.strictEqual(out.config.headers['X-Org'], '1');
+});
+
+test('mcpClient: http connect uses StreamableHTTPClientTransport with headers + bearer', async () => {
+  const { createRegistry } = require('../src/main/tools/registry.js');
+  const { createMcpClient } = require('../src/main/tools/mcpClient.js');
+  const registry = createRegistry();
+  const mock = makeHttpMockSdk({
+    toolsList: [{ name: 'list_repos', description: '', inputSchema: { type: 'object' } }],
+  });
+  const client = createMcpClient({
+    registry,
+    loadSdk: async (type) => {
+      assert.strictEqual(type, 'http');
+      return mock.sdk;
+    },
+  });
+  client.add({
+    id: 'gh',
+    type: 'http',
+    url: 'https://api.example.com/mcp',
+    bearerToken: 'tok',
+    headers: { 'X-Org': '1' },
+  });
+  const r = await client.connect('gh');
+  assert.strictEqual(r.status, 'connected');
+  const t = mock.introspect.getLastTransport();
+  assert.strictEqual(t.url.toString(), 'https://api.example.com/mcp');
+  assert.strictEqual(t.opts.requestInit.headers['Authorization'], 'Bearer tok');
+  assert.strictEqual(t.opts.requestInit.headers['X-Org'], '1');
+});
+
+test('mcpClient: http connect with no bearerToken omits Authorization header', async () => {
+  const { createRegistry } = require('../src/main/tools/registry.js');
+  const { createMcpClient } = require('../src/main/tools/mcpClient.js');
+  const mock = makeHttpMockSdk();
+  const client = createMcpClient({
+    registry: createRegistry(),
+    loadSdk: async () => mock.sdk,
+  });
+  client.add({ id: 'open', type: 'http', url: 'https://api.example.com/mcp' });
+  await client.connect('open');
+  const t = mock.introspect.getLastTransport();
+  assert.strictEqual(t.opts.requestInit.headers['Authorization'], undefined);
+});
+
+test('mcpClient: http connect failure → error status with lastError', async () => {
+  const { createRegistry } = require('../src/main/tools/registry.js');
+  const { createMcpClient } = require('../src/main/tools/mcpClient.js');
+  const mock = makeHttpMockSdk({ failConnect: true });
+  const client = createMcpClient({
+    registry: createRegistry(),
+    loadSdk: async () => mock.sdk,
+  });
+  client.add({ id: 'gh', type: 'http', url: 'https://api.example.com/mcp' });
+  await assert.rejects(client.connect('gh'), /http connect failed/);
+  const g = client.get('gh');
+  assert.strictEqual(g.status, 'error');
 });

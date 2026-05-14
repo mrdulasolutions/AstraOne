@@ -59,6 +59,172 @@ body {
   min-width: 0;
 }
 
+.approval-card {
+  -webkit-app-region: no-drag;
+  align-self: center;
+  width: 100%;
+  max-width: 720px;
+  padding: 12px 14px 14px;
+  border-radius: 18px;
+  background: rgba(18, 20, 28, var(--surface-alpha));
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  backdrop-filter: blur(22px) saturate(1.4);
+  animation: reply-fade-in 0.18s ease-out;
+}
+
+.approval-card.is-hidden { display: none !important; }
+
+.approval-card[data-effect='write'] { border-color: rgba(251, 191, 36, 0.55); }
+.approval-card[data-effect='exec']  { border-color: rgba(248, 113, 113, 0.65); }
+.approval-card[data-effect='read']  { border-color: rgba(165, 180, 252, 0.40); }
+
+.approval-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.approval-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.approval-tool-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.approval-preview {
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.92);
+  margin-bottom: 8px;
+}
+
+.approval-args {
+  font-size: 11px;
+  margin-bottom: 10px;
+}
+
+.approval-args summary {
+  cursor: pointer;
+  color: rgba(165, 180, 252, 0.9);
+  user-select: none;
+}
+
+.approval-args pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.audit-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns: 60px 1fr auto;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.audit-row + .audit-row { border-top: 1px solid rgba(255, 255, 255, 0.04); }
+
+.audit-row .audit-ts {
+  font-family: ui-monospace, monospace;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.audit-row .audit-id {
+  font-family: ui-monospace, monospace;
+}
+
+.audit-row .audit-status[data-status='ok']     { color: #34d399; }
+.audit-row .audit-status[data-status='denied'] { color: #fbbf24; }
+.audit-row .audit-status[data-status='error']  { color: #f87171; }
+
+.select-input {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.28);
+  color: inherit;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.tool-row {
+  -webkit-app-region: no-drag;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.tool-row + .tool-row { border-top: 1px solid rgba(255, 255, 255, 0.04); }
+
+.tool-row .tool-id {
+  font-family: ui-monospace, monospace;
+}
+
+.tool-row .tool-effect {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.tool-row .tool-effect[data-effect='read']  { background: rgba(165, 180, 252, 0.28); color: #c7d2fe; }
+.tool-row .tool-effect[data-effect='write'] { background: rgba(251, 191, 36, 0.28); color: #fde68a; }
+.tool-row .tool-effect[data-effect='exec']  { background: rgba(248, 113, 113, 0.28); color: #fecaca; }
+
+.tool-row select {
+  font-size: 10px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: rgba(255, 255, 255, 0.86);
+}
+
 .reply-panel {
   -webkit-app-region: no-drag;
   align-self: center;

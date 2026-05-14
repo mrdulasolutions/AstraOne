@@ -16,6 +16,14 @@ const {
 const path = require('node:path');
 const fs = require('node:fs');
 
+const { createRegistry } = require('./tools/registry.js');
+const { createPermissions } = require('./tools/permissions.js');
+const { createAuditLog } = require('./tools/auditLog.js');
+const captureBuiltins = require('./tools/builtins/capture.js');
+const openrouterProvider = require('./providers/openrouter.js');
+const anthropicProvider = require('./providers/anthropic.js');
+const { createRouter } = require('./agents/router.js');
+
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
 /** @type {Tray | null} */
@@ -25,6 +33,14 @@ let tray = null;
 let sessionImageBase64 = null;
 let sessionImageMeta = null;
 let captureArmed = false;
+
+// Agent stack (initialized in app.whenReady — needs userData path for auditLog).
+let toolRegistry = null;
+let toolPermissions = null;
+let toolAuditLog = null;
+let agentRouter = null;
+/** Map<callId, resolve> — pending approval prompts awaiting renderer decision. */
+const pendingApprovals = new Map();
 
 const STATE_FILE = () => path.join(app.getPath('userData'), 'prefs.json');
 
@@ -180,6 +196,9 @@ function loadPrefs() {
     j.elevenlabsVoiceId = typeof j.elevenlabsVoiceId === 'string' && j.elevenlabsVoiceId
       ? j.elevenlabsVoiceId : DEFAULT_ELEVENLABS_VOICE_ID;
     j.ttsAutoSpeak = Boolean(j.ttsAutoSpeak);
+    j.provider = ['openrouter', 'anthropic'].includes(j.provider) ? j.provider : 'openrouter';
+    j.toolPolicies = j.toolPolicies && typeof j.toolPolicies === 'object' ? j.toolPolicies : {};
+    j.serverPolicies = j.serverPolicies && typeof j.serverPolicies === 'object' ? j.serverPolicies : {};
     return j;
   } catch {
     return {
@@ -187,6 +206,9 @@ function loadPrefs() {
       pillOpacity: DEFAULT_PILL_OPACITY,
       elevenlabsVoiceId: DEFAULT_ELEVENLABS_VOICE_ID,
       ttsAutoSpeak: false,
+      provider: 'openrouter',
+      toolPolicies: {},
+      serverPolicies: {},
     };
   }
 }
@@ -384,45 +406,9 @@ function doPanic() {
   if (mainWindow) mainWindow.webContents.send('glass:panic');
 }
 
-async function capturePrimaryScreenThumbnail() {
-  const sources = await desktopCapturer.getSources({
-    types: ['screen'],
-    thumbnailSize: { width: 1920, height: 1200 },
-  });
-  const primary = sources[0];
-  if (!primary) throw new Error('No screen source (grant Screen Recording in System Settings)');
-  const img = primary.thumbnail;
-  if (img.isEmpty()) throw new Error('Empty thumbnail');
-  const jpeg = img.toJPEG(82);
-  return {
-    base64: jpeg.toString('base64'),
-    meta: { id: primary.id, name: primary.name, width: img.getSize().width, height: img.getSize().height },
-  };
-}
-
-async function captureActiveWindowThumbnail() {
-  const sources = await desktopCapturer.getSources({
-    types: ['window'],
-    thumbnailSize: { width: 1920, height: 1200 },
-    fetchWindowIcons: true,
-  });
-  if (!sources.length) throw new Error('No windows (grant Screen Recording in System Settings)');
-  // Heuristic: pick largest non-self window by area (skip tiny panels)
-  const filtered = sources.filter(
-    (s) => !s.name.includes('Astra Dock') && !s.name.includes('Glass') && s.name.length > 0,
-  );
-  const pick = filtered.sort((a, b) => {
-    const as = a.thumbnail.getSize();
-    const bs = b.thumbnail.getSize();
-    return bs.width * bs.height - as.width * as.height;
-  })[0] || sources[0];
-  const img = pick.thumbnail;
-  const jpeg = img.toJPEG(82);
-  return {
-    base64: jpeg.toString('base64'),
-    meta: { id: pick.id, name: pick.name, width: img.getSize().width, height: img.getSize().height },
-  };
-}
+// Capture handlers live in tools/builtins/capture.js so the registry can reuse them.
+const capturePrimaryScreenThumbnail = captureBuiltins.capturePrimaryScreenThumbnail;
+const captureActiveWindowThumbnail = captureBuiltins.captureActiveWindowThumbnail;
 
 async function askOpenRouter(apiKey, modelId, userPrompt, imageBase64) {
   const content = [
@@ -465,6 +451,62 @@ function wrapUserPayload(userPrompt, hasImage) {
   return `[User question]\n${userPrompt}\n\n[Context: ${hasImage ? 'A single JPEG screenshot is attached for this turn.' : 'No screenshot for this turn.'}]`;
 }
 
+function emitToRenderer(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
+async function awaitApprovalFromRenderer(descriptor) {
+  return new Promise((resolve) => {
+    pendingApprovals.set(descriptor.callId, resolve);
+    emitToRenderer('glass:requestApproval', descriptor);
+    // Safety: drop the pending approval if no decision after 10 minutes.
+    setTimeout(() => {
+      if (pendingApprovals.has(descriptor.callId)) {
+        pendingApprovals.delete(descriptor.callId);
+        resolve('deny');
+      }
+    }, 10 * 60 * 1000).unref?.();
+  });
+}
+
+function initAgentStack() {
+  toolRegistry = createRegistry();
+  toolPermissions = createPermissions({
+    getToolPolicy: (toolId) => loadPrefs().toolPolicies?.[toolId] || null,
+    getServerPolicy: (serverId) => loadPrefs().serverPolicies?.[serverId] || null,
+  });
+  toolAuditLog = createAuditLog({
+    logPath: path.join(app.getPath('userData'), 'audit.log'),
+  });
+
+  // Register built-in tools. Capture tools update the session image buffer as a
+  // side effect so the renderer's "Clip ready" status keeps working.
+  captureBuiltins.register(toolRegistry, {
+    onCaptured: (base64, meta) => {
+      sessionImageBase64 = base64;
+      sessionImageMeta = meta;
+      broadcastState();
+    },
+  });
+
+  agentRouter = createRouter({
+    registry: toolRegistry,
+    permissions: toolPermissions,
+    auditLog: toolAuditLog,
+    providers: {
+      openrouter: { chat: openrouterProvider.chat },
+      anthropic: { chat: anthropicProvider.chat },
+    },
+    getProviderApiKey: (providerId) => getApiKey(providerId),
+    awaitApproval: awaitApprovalFromRenderer,
+    emit: (event, payload) => emitToRenderer(event, payload),
+    getSessionImage: () => sessionImageBase64,
+    getSessionMeta: () => sessionImageMeta,
+  });
+}
+
 function setupIpc() {
   ipcMain.handle('glass:toggleVisibility', () => {
     if (!mainWindow) return;
@@ -502,6 +544,7 @@ function setupIpc() {
       pillOpacity: clampOpacity(prefs.pillOpacity ?? DEFAULT_PILL_OPACITY),
       elevenlabsVoiceId: prefs.elevenlabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID,
       ttsAutoSpeak: Boolean(prefs.ttsAutoSpeak),
+      provider: prefs.provider || 'openrouter',
     };
   });
 
@@ -652,9 +695,118 @@ function setupIpc() {
       return { ok: false, error: err.message || String(err) };
     }
   });
+
+  // ——— Agent / router IPC ———
+
+  ipcMain.handle('glass:runAgent', async (_e, payload = {}) => {
+    if (!agentRouter) return { ok: false, error: 'agent not initialized' };
+    const prefs = loadPrefs();
+    const providerId = String(payload.providerId || prefs.provider || 'openrouter');
+    // For openrouter, fall back to the saved openrouter model. Anthropic uses a separate field
+    // (anthropicModel) once we add a picker; for now, accept model on the payload.
+    const model = String(
+      payload.model ||
+      (providerId === 'openrouter' ? prefs.openrouterModel : '') ||
+      DEFAULT_OPENROUTER_MODEL,
+    );
+    try {
+      const out = await agentRouter.run({
+        providerId,
+        model,
+        prompt: String(payload.prompt || ''),
+        includeScreen: Boolean(payload.includeScreen),
+      });
+      return { ok: true, ...out };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('glass:approveToolCall', (_e, payload = {}) => {
+    const id = String(payload.callId || '');
+    const decision = String(payload.decision || 'deny');
+    const resolve = pendingApprovals.get(id);
+    if (!resolve) return { ok: false, error: 'no pending approval with that callId' };
+    pendingApprovals.delete(id);
+    resolve(decision);
+    return { ok: true };
+  });
+
+  ipcMain.handle('glass:cancelAgentRun', () => {
+    if (!agentRouter) return { ok: false, error: 'agent not initialized' };
+    const ok = agentRouter.cancel();
+    // Reject any pending approvals so the run can unwind.
+    for (const [id, resolve] of pendingApprovals) {
+      pendingApprovals.delete(id);
+      resolve('deny');
+    }
+    return { ok };
+  });
+
+  ipcMain.handle('glass:getAuditLog', (_e, payload = {}) => {
+    if (!toolAuditLog) return { ok: true, entries: [] };
+    const limit = Math.max(1, Math.min(200, Number(payload.limit) || 20));
+    return { ok: true, entries: toolAuditLog.tail(limit) };
+  });
+
+  ipcMain.handle('glass:listTools', () => {
+    if (!toolRegistry) return { ok: true, tools: [] };
+    const prefs = loadPrefs();
+    const tools = toolRegistry.list().map((t) => ({
+      id: t.id,
+      source: t.source,
+      serverId: t.serverId || null,
+      effect: t.effect,
+      description: t.description,
+      policy: prefs.toolPolicies?.[t.id] || null,
+    }));
+    return { ok: true, tools };
+  });
+
+  ipcMain.handle('glass:setToolPolicy', (_e, payload = {}) => {
+    const prefs = loadPrefs();
+    const toolId = String(payload.toolId || '');
+    const policy = payload.policy ? String(payload.policy) : null;
+    if (!toolId) return { ok: false, error: 'toolId required' };
+    if (policy && !['auto', 'prompt', 'always-prompt'].includes(policy)) {
+      return { ok: false, error: 'invalid policy' };
+    }
+    if (!prefs.toolPolicies) prefs.toolPolicies = {};
+    if (policy) prefs.toolPolicies[toolId] = policy;
+    else delete prefs.toolPolicies[toolId];
+    savePrefs(prefs);
+    return { ok: true };
+  });
+
+  ipcMain.handle('glass:setProvider', (_e, payload = {}) => {
+    const prefs = loadPrefs();
+    const providerId = String(payload.providerId || '');
+    if (!['openrouter', 'anthropic'].includes(providerId)) {
+      return { ok: false, error: 'invalid provider' };
+    }
+    prefs.provider = providerId;
+    savePrefs(prefs);
+    return { ok: true, provider: providerId };
+  });
+
+  ipcMain.handle('glass:setProviderApiKey', (_e, payload = {}) => {
+    const providerId = String(payload.providerId || '');
+    if (!['openrouter', 'anthropic', 'elevenlabs'].includes(providerId)) {
+      return { ok: false, error: 'invalid provider' };
+    }
+    const k = String(payload.key || '').trim();
+    if (k) setApiKey(providerId, k);
+    return { ok: true, saved: Boolean(k) };
+  });
+
+  ipcMain.handle('glass:getProviderKeyPresent', (_e, payload = {}) => {
+    const providerId = String(payload.providerId || '');
+    return { present: Boolean(getApiKey(providerId)) };
+  });
 }
 
 app.whenReady().then(() => {
+  initAgentStack();
   createWindow();
   setupIpc();
   registerShortcuts();

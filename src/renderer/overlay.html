@@ -43,6 +43,23 @@
         <button type="button" class="pill-btn pill-btn-ghost" id="btnHide" title="Hide overlay">−</button>
       </div>
 
+      <div class="approval-card is-hidden" id="approvalCard" data-effect="">
+        <div class="approval-head">
+          <span class="approval-label">Tool approval</span>
+          <span class="approval-tool-id" id="approvalToolId"></span>
+        </div>
+        <div class="approval-preview" id="approvalPreview"></div>
+        <details class="approval-args">
+          <summary>Show arguments</summary>
+          <pre id="approvalArgs"></pre>
+        </details>
+        <div class="approval-actions">
+          <button type="button" class="pill-btn pill-btn-primary" id="btnApprove" title="Approve once (Cmd+Y)">Approve</button>
+          <button type="button" class="pill-btn" id="btnApproveServer" title="Approve all from this server for 15 minutes">Approve server (15m)</button>
+          <button type="button" class="pill-btn pill-btn-danger" id="btnDeny" title="Deny (Cmd+N)">Deny</button>
+        </div>
+      </div>
+
       <div class="reply-panel is-hidden" id="replyPanel">
         <div class="reply-head">
           <span class="reply-label">Answer</span>
@@ -112,6 +129,48 @@
             </label>
           </div>
         </div>
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h2 class="settings-section-title">Agent · Tools &amp; Permissions</h2>
+            <p class="settings-section-sub">
+              The agent picks tools to use during <strong>Ask</strong>. <em>read</em> is auto-approved by default; <em>write</em> prompts; <em>exec</em> always prompts. Adjust per tool below.
+            </p>
+          </div>
+          <div class="settings-grid settings-grid--audio">
+            <div class="settings-col">
+              <label class="field">
+                <div class="field-row">
+                  <span>Provider</span>
+                </div>
+                <select id="providerSelect" class="select-input">
+                  <option value="openrouter">OpenRouter (default)</option>
+                  <option value="anthropic">Anthropic (native)</option>
+                </select>
+                <p class="model-hint">OpenRouter uses your saved model id. Anthropic uses its own model id (paste it below).</p>
+              </label>
+              <label class="field" id="anthropicModelField" style="display:none">
+                <div class="field-row"><span>Anthropic model</span></div>
+                <input type="text" id="anthropicModel" spellcheck="false" autocomplete="off" placeholder="claude-sonnet-4-5" />
+              </label>
+              <label class="field">
+                <div class="field-row"><span>Anthropic key</span></div>
+                <input type="password" id="anthropicKey" autocomplete="off" placeholder="sk-ant-…" />
+              </label>
+              <button type="button" class="pill-btn pill-btn-primary wide" id="btnSaveAnthropicKey">Save Anthropic key</button>
+            </div>
+            <div class="settings-col">
+              <label class="field">
+                <div class="field-row"><span>Registered tools</span></div>
+                <ul class="model-list" id="toolList"></ul>
+              </label>
+              <label class="field">
+                <div class="field-row"><span>Recent activity</span></div>
+                <ul class="audit-list" id="auditList"></ul>
+              </label>
+            </div>
+          </div>
+        </div>
+
         <div class="settings-section">
           <div class="settings-section-head">
             <h2 class="settings-section-title">ElevenLabs · Voice</h2>

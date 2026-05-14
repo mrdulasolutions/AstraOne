@@ -74,6 +74,74 @@ function clearAnswer() {
   scheduleResizeToPill();
 }
 
+// ——— Approval card + tool events ———
+
+function shortToolName(id) {
+  if (!id) return '';
+  const parts = id.split('.');
+  return parts[parts.length - 1] || id;
+}
+
+function showApprovalCard(descriptor) {
+  pendingApproval = descriptor;
+  const card = $('approvalCard');
+  if (!card) return;
+  card.dataset.effect = descriptor.effect || '';
+  $('approvalToolId').textContent = descriptor.toolId + (descriptor.serverId ? ` · ${descriptor.serverId}` : ` · ${descriptor.source || ''}`);
+  $('approvalPreview').textContent = descriptor.previewText || descriptor.description || 'No preview available.';
+  try {
+    $('approvalArgs').textContent = JSON.stringify(descriptor.args || {}, null, 2);
+  } catch {
+    $('approvalArgs').textContent = String(descriptor.args || '');
+  }
+  const serverBtn = $('btnApproveServer');
+  if (serverBtn) serverBtn.style.display = descriptor.serverId ? '' : 'none';
+  card.classList.remove('is-hidden');
+  $('btnApprove')?.focus();
+  scheduleResizeToPill();
+}
+
+function hideApprovalCard() {
+  pendingApproval = null;
+  $('approvalCard')?.classList.add('is-hidden');
+  scheduleResizeToPill();
+}
+
+function resolveApproval(decision) {
+  if (!pendingApproval) return;
+  const callId = pendingApproval.callId;
+  hideApprovalCard();
+  void window.glass.approveToolCall({ callId, decision });
+}
+
+function handleToolEvent(payload) {
+  if (!payload) return;
+  switch (payload.phase) {
+    case 'thinking':
+      setReply('Thinking…');
+      break;
+    case 'calling':
+      setReply(`Calling ${shortToolName(payload.toolId)}…`);
+      break;
+    case 'awaiting_approval':
+      // The approval card is shown via the separate onRequestApproval channel; here we
+      // just update the chip so the user sees what's going on.
+      setReply(`Awaiting approval: ${shortToolName(payload.toolId)}`);
+      break;
+    case 'result':
+      if (payload.status === 'ok') setReply(`✓ ${shortToolName(payload.toolId)}`);
+      else if (payload.status === 'denied') setReply(`Denied: ${shortToolName(payload.toolId)}`);
+      else setReply(`✗ ${shortToolName(payload.toolId)}${payload.error ? `: ${payload.error}` : ''}`);
+      break;
+    case 'final':
+      // Final text is delivered via runAgent's return value; the chip clears.
+      setReply('');
+      break;
+    default:
+      break;
+  }
+}
+
 function setStatus(state) {
   const has = state.hasSessionImage;
   const armed = state.captureArmed;
@@ -85,6 +153,8 @@ function openSettings() {
   $('settingsPanel')?.classList.remove('is-hidden');
   // Lazy-load the catalogs the first time settings opens (and refresh if cache is stale).
   void loadModels(false);
+  void loadTools();
+  void loadAuditLog();
   void (async () => {
     const k = await window.glass.getElevenLabsKeyPresent();
     if (k.present) loadVoices(false);
@@ -135,6 +205,10 @@ let micChunks = [];
 let micMime = 'audio/webm;codecs=opus';
 
 let currentTtsAudio = null;
+
+let pendingApproval = null;  // descriptor of the call currently shown in the approval card
+let activeProvider = 'openrouter';
+let anthropicModel = '';
 
 function formatPricePerMillion(perToken) {
   if (!perToken || perToken === 0) return 'free';
@@ -424,6 +498,54 @@ function stopMicRecording() {
   try { micRecorder.stop(); } catch {}
 }
 
+// ——— Agent settings: tools + audit log ———
+
+async function loadTools() {
+  const list = $('toolList');
+  if (!list) return;
+  const r = await window.glass.listTools();
+  if (!r?.ok || !r.tools?.length) {
+    list.innerHTML = '<li class="model-empty">No tools registered yet.</li>';
+    return;
+  }
+  list.innerHTML = r.tools.map((t) => {
+    const policy = t.policy || '';
+    const opts = (val, label) =>
+      `<option value="${val}" ${policy === val ? 'selected' : ''}>${label}</option>`;
+    return `<li class="tool-row" data-id="${escapeHtml(t.id)}">
+      <span class="tool-id">${escapeHtml(t.id)}</span>
+      <span class="tool-effect" data-effect="${escapeHtml(t.effect)}">${escapeHtml(t.effect)}</span>
+      <select class="tool-policy" data-id="${escapeHtml(t.id)}">
+        <option value="" ${!policy ? 'selected' : ''}>default</option>
+        ${opts('auto', 'auto')}
+        ${opts('prompt', 'prompt')}
+        ${opts('always-prompt', 'always')}
+      </select>
+    </li>`;
+  }).join('');
+}
+
+async function loadAuditLog() {
+  const list = $('auditList');
+  if (!list) return;
+  const r = await window.glass.getAuditLog(20);
+  if (!r?.ok || !r.entries?.length) {
+    list.innerHTML = '<li class="model-empty">No tool calls yet.</li>';
+    return;
+  }
+  // Show newest first.
+  const entries = [...r.entries].reverse();
+  list.innerHTML = entries.map((e) => {
+    let ts;
+    try { ts = new Date(e.ts).toLocaleTimeString(); } catch { ts = '—'; }
+    return `<li class="audit-row">
+      <span class="audit-ts">${escapeHtml(ts)}</span>
+      <span class="audit-id">${escapeHtml(e.id || '')}</span>
+      <span class="audit-status" data-status="${escapeHtml(e.status || '')}">${escapeHtml(e.status || '')} · ${Math.round(e.duration_ms || 0)}ms</span>
+    </li>`;
+  }).join('');
+}
+
 async function loadModels(force) {
   const meta = $('modelMeta');
   if (meta) meta.textContent = 'Loading model catalog from OpenRouter…';
@@ -442,6 +564,11 @@ async function refreshState() {
   currentModelId = s.openrouterModel || '';
   currentVoiceId = s.elevenlabsVoiceId || '';
   ttsAutoSpeak = Boolean(s.ttsAutoSpeak);
+  activeProvider = s.provider || 'openrouter';
+  const providerSel = $('providerSelect');
+  if (providerSel) providerSel.value = activeProvider;
+  const anthField = $('anthropicModelField');
+  if (anthField) anthField.style.display = activeProvider === 'anthropic' ? '' : 'none';
   rebuildModelList();
   renderModelMeta(currentModelId);
   rebuildVoiceList();
@@ -630,6 +757,53 @@ function wire() {
   const linkElKeys = $('linkElevenLabsKeys');
   if (linkElKeys) wireExternalLink(linkElKeys);
 
+  // ——— Approval card + tool-event stream ———
+
+  $('btnApprove')?.addEventListener('click', () => resolveApproval('approve'));
+  $('btnApproveServer')?.addEventListener('click', () => resolveApproval('approve_server_session'));
+  $('btnDeny')?.addEventListener('click', () => resolveApproval('deny'));
+
+  document.addEventListener('keydown', (e) => {
+    if (!pendingApproval) return;
+    const meta = e.metaKey || e.ctrlKey;
+    if (meta && e.key.toLowerCase() === 'y') { e.preventDefault(); resolveApproval('approve'); }
+    if (meta && e.key.toLowerCase() === 'n') { e.preventDefault(); resolveApproval('deny'); }
+  });
+
+  window.glass.onToolEvent(handleToolEvent);
+  window.glass.onRequestApproval(showApprovalCard);
+
+  // ——— Provider + Anthropic + tool policies ———
+
+  const providerSel = $('providerSelect');
+  if (providerSel) {
+    providerSel.addEventListener('change', async () => {
+      activeProvider = providerSel.value;
+      await window.glass.setProvider(activeProvider);
+      const f = $('anthropicModelField');
+      if (f) f.style.display = activeProvider === 'anthropic' ? '' : 'none';
+    });
+  }
+
+  $('anthropicModel')?.addEventListener('change', () => {
+    anthropicModel = ($('anthropicModel')?.value || '').trim();
+  });
+
+  $('btnSaveAnthropicKey')?.addEventListener('click', async () => {
+    const k = ($('anthropicKey')?.value || '').trim();
+    const r = await window.glass.setProviderApiKey({ providerId: 'anthropic', key: k });
+    if ($('anthropicKey')) $('anthropicKey').value = '';
+    setReply(r.saved ? 'Anthropic key saved.' : 'No change (enter a key to save).');
+  });
+
+  $('toolList')?.addEventListener('change', async (e) => {
+    const t = e.target;
+    if (!t?.classList?.contains('tool-policy')) return;
+    const id = t.dataset.id;
+    const policy = t.value || null;
+    await window.glass.setToolPolicy({ toolId: id, policy });
+  });
+
   const opacitySlider = $('pillOpacity');
   if (opacitySlider) {
     // Live preview as the user drags; persist on release to avoid spamming IPC.
@@ -657,8 +831,8 @@ function wire() {
     }
     clearAnswer();
     // Ask "just works": if no capture in the buffer, grab the active window now.
-    // Window capture (vs. full screen) gives the model the app the user is in, not the whole desktop.
-    // If the user explicitly hit Screen/Window beforehand, that buffer is preserved.
+    // The agent loop can also call capture tools mid-run, but pre-capturing keeps
+    // simple one-shot questions fast.
     const state = await window.glass.getState();
     if (!state.hasSessionImage) {
       setReply('Capturing window…');
@@ -672,10 +846,22 @@ function wire() {
       await refreshState();
     }
     setReply('Thinking…');
-    const r = await window.glass.askLlm({ prompt, includeImage: true });
+    const payload = { prompt, providerId: activeProvider, includeScreen: true };
+    if (activeProvider === 'anthropic') {
+      const m = ($('anthropicModel')?.value || anthropicModel || '').trim();
+      if (!m) {
+        setReply('Set an Anthropic model id in settings first.');
+        return;
+      }
+      payload.model = m;
+      anthropicModel = m;
+    }
+    const r = await window.glass.runAgent(payload);
     if (r.ok) {
       setReply('');
       showAnswer(r.text);
+      // The agent may have run tools; refresh the audit log for the settings panel.
+      void loadAuditLog();
     } else {
       setReply(r.error || 'Error');
     }

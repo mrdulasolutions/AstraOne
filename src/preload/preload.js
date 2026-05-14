@@ -21,6 +21,31 @@ contextBridge.exposeInMainWorld('glass', {
   transcribeAudio: ({ audioBuffer, mimeType }) =>
     ipcRenderer.invoke('glass:transcribeAudio', { audioBuffer, mimeType }),
   speakText: ({ text, voiceId }) => ipcRenderer.invoke('glass:speakText', { text, voiceId }),
+  // —— Agent / router surface ——
+  runAgent: ({ prompt, providerId, model, includeScreen }) =>
+    ipcRenderer.invoke('glass:runAgent', { prompt, providerId, model, includeScreen }),
+  approveToolCall: ({ callId, decision }) =>
+    ipcRenderer.invoke('glass:approveToolCall', { callId, decision }),
+  cancelAgentRun: () => ipcRenderer.invoke('glass:cancelAgentRun'),
+  getAuditLog: (limit) => ipcRenderer.invoke('glass:getAuditLog', { limit }),
+  listTools: () => ipcRenderer.invoke('glass:listTools'),
+  setToolPolicy: ({ toolId, policy }) =>
+    ipcRenderer.invoke('glass:setToolPolicy', { toolId, policy }),
+  setProvider: (providerId) => ipcRenderer.invoke('glass:setProvider', { providerId }),
+  setProviderApiKey: ({ providerId, key }) =>
+    ipcRenderer.invoke('glass:setProviderApiKey', { providerId, key }),
+  getProviderKeyPresent: (providerId) =>
+    ipcRenderer.invoke('glass:getProviderKeyPresent', { providerId }),
+  onToolEvent: (fn) => {
+    const ch = (_e, payload) => fn(payload);
+    ipcRenderer.on('tool:event', ch);
+    return () => ipcRenderer.removeListener('tool:event', ch);
+  },
+  onRequestApproval: (fn) => {
+    const ch = (_e, descriptor) => fn(descriptor);
+    ipcRenderer.on('glass:requestApproval', ch);
+    return () => ipcRenderer.removeListener('glass:requestApproval', ch);
+  },
   openExternal: (url) => ipcRenderer.invoke('glass:openExternal', { url }),
   resizeToContent: (size) => ipcRenderer.invoke('glass:resizeToContent', size),
   setLayout: (mode) => ipcRenderer.invoke('glass:setLayout', { mode }),

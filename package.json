@@ -30,5 +30,8 @@
   "devDependencies": {
     "electron": "^34.0.0",
     "license-checker": "^25.0.1"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.96.0"
   }
 }

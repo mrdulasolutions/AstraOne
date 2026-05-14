@@ -1,0 +1,437 @@
+const $ = (id) => document.getElementById(id);
+
+let resizeDebounce = null;
+
+const PROMPT_MAX_HEIGHT = 200;
+const PROMPT_LINE_MIN = 38;
+
+/** Auto-grow prompt: stays one line until text wraps, then expands up to max height. */
+function syncPromptSize() {
+  const ta = $('prompt');
+  if (!ta || ta.tagName !== 'TEXTAREA') return;
+  ta.style.height = 'auto';
+  const fullScroll = ta.scrollHeight;
+  const h = Math.min(Math.max(fullScroll, PROMPT_LINE_MIN), PROMPT_MAX_HEIGHT);
+  ta.style.height = `${h}px`;
+  const expanded = h > PROMPT_LINE_MIN + 6;
+  ta.classList.toggle('pill-prompt--expanded', expanded);
+  ta.style.overflowY = fullScroll > PROMPT_MAX_HEIGHT ? 'auto' : 'hidden';
+  scheduleResizeToPill();
+}
+
+/** True size of the pill + reply panel (not capped by the current window — avoids a shrink feedback loop). */
+function measurePillContentSize() {
+  const shell = document.querySelector('.pill-shell') || document.querySelector('.glass-pill');
+  if (!shell) return null;
+  const bleed = 40;
+  const w = Math.ceil(shell.scrollWidth + bleed);
+  const h = Math.ceil(Math.max(shell.offsetHeight, shell.scrollHeight) + bleed);
+  return { width: w, height: h };
+}
+
+/** Shrink OS window to hug the pill; uses scrollWidth so we never clip the full toolbar. */
+function scheduleResizeToPill() {
+  if (!$('pillView') || $('pillView').classList.contains('is-hidden')) return;
+  clearTimeout(resizeDebounce);
+  resizeDebounce = setTimeout(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const size = measurePillContentSize();
+        if (!size || !window.glass.resizeToContent) return;
+        void window.glass.resizeToContent(size);
+      });
+    });
+  }, 60);
+}
+
+function setReply(text) {
+  const el = $('reply');
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  el.textContent = s.length > 60 ? `${s.slice(0, 57)}…` : s;
+  el.title = s.length > 60 ? s : '';
+  scheduleResizeToPill();
+}
+
+function showAnswer(text) {
+  const panel = $('replyPanel');
+  const body = $('replyBody');
+  if (!panel || !body) return;
+  body.textContent = String(text || '');
+  panel.classList.remove('is-hidden');
+  scheduleResizeToPill();
+}
+
+function clearAnswer() {
+  const panel = $('replyPanel');
+  if (!panel) return;
+  panel.classList.add('is-hidden');
+  const body = $('replyBody');
+  if (body) body.textContent = '';
+  scheduleResizeToPill();
+}
+
+function setStatus(state) {
+  const has = state.hasSessionImage;
+  const armed = state.captureArmed;
+  $('statusDot').classList.toggle('on', armed || has);
+  $('statusText').textContent = has ? (armed ? 'Clip · armed' : 'Clip ready') : armed ? 'Armed' : 'Idle';
+}
+
+function openSettings() {
+  $('settingsPanel')?.classList.remove('is-hidden');
+  // Lazy-load the catalog the first time settings opens (and refresh if cache is stale).
+  void loadModels(false);
+  scheduleResizeToPill();
+}
+
+function closeSettings() {
+  $('settingsPanel')?.classList.add('is-hidden');
+  scheduleResizeToPill();
+}
+
+function forcePillUi() {
+  $('settingsPanel')?.classList.add('is-hidden');
+  scheduleResizeToPill();
+}
+
+function applyScreenAwareReplyCap() {
+  // Use screen.availHeight (excludes menu bar/dock) so the panel can fill comfortably without
+  // being driven by the window's own viewport (which is what 60vh resolves against).
+  const availH = (window.screen && window.screen.availHeight) || 900;
+  const cap = Math.max(360, Math.floor(availH - 180)); // leave room for pill + menubar + breathing
+  document.documentElement.style.setProperty('--reply-max-h', `${cap}px`);
+}
+
+function applyPillOpacity(alpha) {
+  const a = Math.min(1, Math.max(0, Number(alpha) || 0));
+  document.documentElement.style.setProperty('--surface-alpha', String(a));
+  const slider = $('pillOpacity');
+  const label = $('pillOpacityValue');
+  const pct = Math.round(a * 100);
+  if (slider && slider.value !== String(pct)) slider.value = String(pct);
+  if (label) label.textContent = `${pct}%`;
+}
+
+let modelCatalog = [];
+let modelFilter = 'all';
+let currentModelId = '';
+
+function formatPricePerMillion(perToken) {
+  if (!perToken || perToken === 0) return 'free';
+  const perMil = Number(perToken) * 1_000_000;
+  if (perMil < 0.01) return `$${perMil.toFixed(4)}/M`;
+  if (perMil < 1) return `$${perMil.toFixed(3)}/M`;
+  return `$${perMil.toFixed(2)}/M`;
+}
+
+function formatContext(n) {
+  if (!n) return null;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0)}M ctx`;
+  if (n >= 1000) return `${Math.round(n / 1000)}K ctx`;
+  return `${n} ctx`;
+}
+
+function modelMatchesFilter(m, filter) {
+  if (filter === 'free') return m.free;
+  if (filter === 'vision') return m.vision;
+  if (filter === 'audio') return m.audio || m.outputsAudio;
+  return true;
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+}
+
+function rebuildModelList() {
+  const list = $('modelList');
+  const search = $('modelSearch');
+  if (!list) return;
+  const q = (search?.value || '').toLowerCase().trim();
+  const filtered = modelCatalog.filter((m) => {
+    if (!modelMatchesFilter(m, modelFilter)) return false;
+    if (!q) return true;
+    return m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
+  });
+  // Sort: vision first (most relevant for screenshots), then free, then alpha.
+  filtered.sort((a, b) => {
+    if (a.vision !== b.vision) return a.vision ? -1 : 1;
+    if (a.free !== b.free) return a.free ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  if (!filtered.length) {
+    list.innerHTML = '<li class="model-empty">No models match the filter or search.</li>';
+    return;
+  }
+  list.innerHTML = filtered.slice(0, 200).map((m) => {
+    const tags = [];
+    if (m.free) tags.push('<span class="badge free">FREE</span>');
+    else tags.push(`<span class="badge paid">${formatPricePerMillion(m.pricing.prompt)} in</span>`);
+    if (m.vision) tags.push('<span class="badge vision">VISION</span>');
+    if (m.audio) tags.push('<span class="badge audio">AUDIO</span>');
+    const ctx = formatContext(m.contextLength);
+    if (ctx) tags.push(`<span class="badge">${ctx}</span>`);
+    const sel = m.id === currentModelId ? ' is-selected' : '';
+    return `<li class="model-row${sel}" data-id="${escapeHtml(m.id)}" role="option" aria-selected="${m.id === currentModelId}">
+      <div class="model-row-name">${escapeHtml(m.name)}</div>
+      <div class="model-row-id">${escapeHtml(m.id)}</div>
+      <div class="model-row-tags">${tags.join('')}</div>
+    </li>`;
+  }).join('');
+}
+
+function renderModelMeta(id) {
+  const meta = $('modelMeta');
+  if (!meta) return;
+  if (!id) {
+    meta.textContent = 'Pick a model from the list below. Filters narrow it down.';
+    return;
+  }
+  const m = modelCatalog.find((x) => x.id === id);
+  if (!m) {
+    meta.innerHTML = `<div class="meta-desc">Selected: <code>${escapeHtml(id)}</code> — will be sent to OpenRouter as-is (not in fetched catalog).</div>`;
+    return;
+  }
+  const badges = [];
+  if (m.free) badges.push('<span class="badge free">FREE</span>');
+  else badges.push(`<span class="badge paid">${formatPricePerMillion(m.pricing.prompt)} in · ${formatPricePerMillion(m.pricing.completion)} out</span>`);
+  if (m.vision) badges.push('<span class="badge vision">VISION</span>');
+  if (m.audio) badges.push('<span class="badge audio">AUDIO IN</span>');
+  if (m.outputsAudio) badges.push('<span class="badge audio">AUDIO OUT</span>');
+  const ctx = formatContext(m.contextLength);
+  if (ctx) badges.push(`<span class="badge">${ctx}</span>`);
+  meta.innerHTML = `
+    <div class="meta-row"><strong>${escapeHtml(m.name)}</strong> &nbsp;<span style="font-size:10px;opacity:.55;font-family:ui-monospace,monospace;">${escapeHtml(m.id)}</span></div>
+    <div class="meta-row">${badges.join('')}</div>
+    ${m.description ? `<div class="meta-desc">${escapeHtml(m.description)}</div>` : ''}
+  `;
+}
+
+async function loadModels(force) {
+  const meta = $('modelMeta');
+  if (meta) meta.textContent = 'Loading model catalog from OpenRouter…';
+  const r = await window.glass.listModels(force);
+  if (!r.ok) {
+    if (meta) meta.textContent = `Couldn't load models: ${r.error || 'unknown error'}.`;
+    return;
+  }
+  modelCatalog = r.models || [];
+  rebuildModelList();
+  renderModelMeta(currentModelId);
+}
+
+async function refreshState() {
+  const s = await window.glass.getState();
+  currentModelId = s.openrouterModel || '';
+  rebuildModelList();
+  renderModelMeta(currentModelId);
+  const k = await window.glass.getOpenRouterKeyPresent();
+  $('apiKey').placeholder = k.present ? 'Key on file — enter to replace' : 'sk-or-v1 key from openrouter.ai';
+  if (typeof s.pillOpacity === 'number') applyPillOpacity(s.pillOpacity);
+  setStatus(s);
+  scheduleResizeToPill();
+}
+
+function wireExternalLink(el) {
+  if (!el) return;
+  el.addEventListener('click', (e) => {
+    e.preventDefault();
+    const href = el.getAttribute('href');
+    if (href) void window.glass.openExternal(href);
+  });
+}
+
+function wire() {
+  $('btnHide').addEventListener('click', () => window.glass.toggleVisibility());
+
+  $('btnSettings').addEventListener('click', () => openSettings());
+  $('btnSettingsDone').addEventListener('click', () => closeSettings());
+
+  wireExternalLink($('linkOpenRouter'));
+  wireExternalLink($('linkOpenRouterModels'));
+
+  $('btnCapScreen').addEventListener('click', async () => {
+    setReply('Capturing…');
+    try {
+      const r = await window.glass.capturePrimaryScreen();
+      setReply(r.ok ? `Screen · ${r.meta?.name || 'ok'}` : JSON.stringify(r));
+      await refreshState();
+    } catch (e) {
+      setReply(String(e.message || e));
+    }
+  });
+
+  $('btnCapWindow').addEventListener('click', async () => {
+    setReply('Capturing…');
+    try {
+      const r = await window.glass.captureActiveWindow();
+      setReply(r.ok ? `Window · ${r.meta?.name || '?'}` : JSON.stringify(r));
+      await refreshState();
+    } catch (e) {
+      setReply(String(e.message || e));
+    }
+  });
+
+  const searchInput = $('modelSearch');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => rebuildModelList());
+  }
+
+  const modelListEl = $('modelList');
+  if (modelListEl) {
+    modelListEl.addEventListener('click', async (e) => {
+      const row = e.target.closest('.model-row');
+      if (!row) return;
+      const id = row.dataset.id;
+      if (!id) return;
+      currentModelId = id;
+      await window.glass.setOpenRouterModel(id);
+      rebuildModelList();
+      renderModelMeta(id);
+    });
+  }
+
+  const filterEl = $('modelFilters');
+  if (filterEl) {
+    filterEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.chip');
+      if (!btn) return;
+      modelFilter = btn.dataset.filter || 'all';
+      for (const c of filterEl.querySelectorAll('.chip')) {
+        c.classList.toggle('is-active', c === btn);
+      }
+      rebuildModelList();
+    });
+  }
+
+  const refreshBtn = $('btnRefreshModels');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+      refreshBtn.disabled = true;
+      const original = refreshBtn.textContent;
+      refreshBtn.textContent = '↻ Refreshing…';
+      void loadModels(true).finally(() => {
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = original;
+      });
+    });
+  }
+
+  const opacitySlider = $('pillOpacity');
+  if (opacitySlider) {
+    // Live preview as the user drags; persist on release to avoid spamming IPC.
+    opacitySlider.addEventListener('input', () => {
+      applyPillOpacity(Number(opacitySlider.value) / 100);
+    });
+    opacitySlider.addEventListener('change', () => {
+      void window.glass.setPillOpacity(Number(opacitySlider.value) / 100);
+    });
+  }
+
+  $('btnSaveKey').addEventListener('click', async () => {
+    const key = $('apiKey').value.trim();
+    const r = await window.glass.setOpenRouterKey(key);
+    $('apiKey').value = '';
+    setReply(r.saved ? 'API key saved.' : 'No change (enter a key to save).');
+    await refreshState();
+  });
+
+  $('btnAsk').addEventListener('click', async () => {
+    const prompt = $('prompt').value.trim();
+    if (!prompt) {
+      setReply('Enter a prompt.');
+      return;
+    }
+    clearAnswer();
+    // Ask "just works": if no capture in the buffer, grab the active window now.
+    // Window capture (vs. full screen) gives the model the app the user is in, not the whole desktop.
+    // If the user explicitly hit Screen/Window beforehand, that buffer is preserved.
+    const state = await window.glass.getState();
+    if (!state.hasSessionImage) {
+      setReply('Capturing window…');
+      try {
+        const r = await window.glass.captureActiveWindow();
+        if (r?.meta?.name) setReply(`Window · ${r.meta.name}`);
+      } catch (e) {
+        setReply(String(e.message || e));
+        return;
+      }
+      await refreshState();
+    }
+    setReply('Thinking…');
+    const r = await window.glass.askLlm({ prompt, includeImage: true });
+    if (r.ok) {
+      setReply('');
+      showAnswer(r.text);
+    } else {
+      setReply(r.error || 'Error');
+    }
+  });
+
+  $('btnPanic').addEventListener('click', async () => {
+    await window.glass.panic();
+    setReply('Panic · buffer cleared');
+    clearAnswer();
+    await refreshState();
+  });
+
+  const replyCloseBtn = $('btnReplyClose');
+  if (replyCloseBtn) replyCloseBtn.addEventListener('click', () => clearAnswer());
+
+  const replyCopyBtn = $('btnReplyCopy');
+  if (replyCopyBtn) {
+    replyCopyBtn.addEventListener('click', async () => {
+      const text = $('replyBody')?.textContent || '';
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        const original = replyCopyBtn.textContent;
+        replyCopyBtn.textContent = 'Copied';
+        setTimeout(() => { replyCopyBtn.textContent = original; }, 1100);
+      } catch {
+        setReply('Copy failed');
+      }
+    });
+  }
+
+  const promptEl = $('prompt');
+  if (promptEl) {
+    promptEl.addEventListener('input', () => syncPromptSize());
+    promptEl.addEventListener('focus', () => syncPromptSize());
+    promptEl.addEventListener('blur', () => {
+      requestAnimationFrame(() => syncPromptSize());
+    });
+    // Cmd/Ctrl+Enter from the prompt triggers Ask (in addition to the button).
+    promptEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        $('btnAsk').click();
+      }
+    });
+  }
+
+  const shellEl = document.querySelector('.pill-shell');
+  if (shellEl && typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(() => scheduleResizeToPill()).observe(shellEl);
+  }
+  window.addEventListener('resize', () => scheduleResizeToPill());
+
+  window.glass.onState((state) => setStatus(state));
+  window.glass.onHotkeyAsk(() => {
+    $('btnAsk').click();
+  });
+  window.glass.onPanicEvent(() => {
+    setReply('Panic · buffer cleared');
+    clearAnswer();
+    refreshState();
+  });
+  window.glass.onForcePill(() => {
+    forcePillUi();
+  });
+}
+
+wire();
+applyScreenAwareReplyCap();
+window.addEventListener('resize', applyScreenAwareReplyCap);
+refreshState();
+setReply('');
+syncPromptSize();

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'none';" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Astra Dock</title>
+    <link rel="stylesheet" href="overlay.css" />
+  </head>
+  <body class="body-root">
+    <div id="pillView" class="view pill-view">
+     <div class="pill-shell">
+      <div class="glass-pill">
+        <div class="drag-zone" title="Drag to move">
+          <img class="brand-logo" src="assets/astra-dock.svg" alt="Astra Dock" />
+          <span class="status-cluster">
+            <span class="dot" id="statusDot" aria-hidden="true"></span>
+            <span id="statusText" class="status-text">Idle</span>
+          </span>
+        </div>
+
+        <button type="button" class="pill-btn" id="btnCapScreen" title="Capture primary screen">Screen</button>
+        <button type="button" class="pill-btn" id="btnCapWindow" title="Capture frontmost window">Window</button>
+
+        <textarea
+          id="prompt"
+          class="pill-input pill-prompt"
+          rows="1"
+          spellcheck="true"
+          placeholder="Ask about what’s on screen…"
+          autocomplete="off"
+        ></textarea>
+
+        <span class="reply-chip" id="reply" title="" aria-live="polite"></span>
+
+        <button type="button" class="pill-btn pill-btn-primary" id="btnAsk">Ask</button>
+        <button type="button" class="pill-btn pill-btn-danger" id="btnPanic" title="Clear capture buffer">Panic</button>
+        <button type="button" class="pill-btn pill-btn-ghost" id="btnSettings" title="API key &amp; help">⚙</button>
+        <button type="button" class="pill-btn pill-btn-ghost" id="btnHide" title="Hide overlay">−</button>
+      </div>
+
+      <div class="reply-panel is-hidden" id="replyPanel">
+        <div class="reply-head">
+          <span class="reply-label">Answer</span>
+          <div class="reply-actions">
+            <button type="button" class="pill-btn pill-btn-ghost" id="btnReplyCopy" title="Copy answer">Copy</button>
+            <button type="button" class="pill-btn pill-btn-ghost" id="btnReplyClose" title="Dismiss">×</button>
+          </div>
+        </div>
+        <div class="reply-body" id="replyBody"></div>
+      </div>
+
+      <div class="settings-panel is-hidden" id="settingsPanel">
+        <div class="settings-head">
+          <div class="settings-brand">
+            <img class="settings-logo" src="assets/astra-dock.svg" alt="" />
+            <span class="settings-wordmark">ASTRA DOCK</span>
+          </div>
+          <button type="button" class="pill-btn pill-btn-ghost" id="btnSettingsDone">Done</button>
+        </div>
+        <div class="settings-grid">
+          <div class="settings-col">
+            <p class="settings-hint">
+              Grant <strong>Screen Recording</strong> in System Settings. Captures stay in RAM until Panic or quit. API key is stored with OS encryption when available.
+            </p>
+            <p class="settings-hint openrouter-hint">
+              LLMs run through <strong>OpenRouter</strong> — create a key at
+              <a href="https://openrouter.ai/settings/keys" id="linkOpenRouter">openrouter.ai/settings/keys</a> (free tier includes many <code>:free</code> models).
+            </p>
+            <label class="field">
+              <span>OpenRouter key</span>
+              <input type="password" id="apiKey" autocomplete="off" placeholder="" />
+            </label>
+            <button type="button" class="pill-btn pill-btn-primary wide" id="btnSaveKey">Save API key</button>
+            <label class="field">
+              <div class="field-row">
+                <span>Pill transparency</span>
+                <span class="slider-value" id="pillOpacityValue">58%</span>
+              </div>
+              <input type="range" id="pillOpacity" class="pill-slider" min="0" max="100" step="1" value="58" />
+            </label>
+            <p class="kbd-hint">
+              <kbd>⌘\</kbd> toggle · <kbd>⌘↵</kbd> ask · arrows move · <kbd>⌘⎋</kbd> panic
+            </p>
+          </div>
+          <div class="settings-col">
+            <label class="field">
+              <div class="field-row">
+                <span>Model</span>
+                <button type="button" class="link-btn" id="btnRefreshModels" title="Refetch models from OpenRouter">↻ Refresh</button>
+              </div>
+              <input
+                type="text"
+                id="modelSearch"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="Search models by name or id…"
+              />
+              <div class="model-filters" id="modelFilters">
+                <button type="button" class="chip is-active" data-filter="all">All</button>
+                <button type="button" class="chip" data-filter="free">Free</button>
+                <button type="button" class="chip" data-filter="vision">Vision</button>
+                <button type="button" class="chip" data-filter="audio">Audio</button>
+              </div>
+              <ul class="model-list" id="modelList" role="listbox" aria-label="Models"></ul>
+              <div class="model-meta" id="modelMeta">Loading model catalog from OpenRouter…</div>
+            </label>
+          </div>
+        </div>
+      </div>
+     </div>
+    </div>
+
+    <script src="overlay.js"></script>
+  </body>
+</html>

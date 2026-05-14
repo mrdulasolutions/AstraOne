@@ -12,9 +12,10 @@ A product of **Astra One** by [MR Dula Solutions](#about), a DBA of MR Dula Ente
 
 - **Float anywhere.** A wide pill HUD pinned to the top of your screen. Drag it, hide it, summon it with ⌘\\. Stays above other apps and fullscreen content.
 - **Ask about what's on screen.** One click: Astra Dock screenshots your active window and sends it to a vision-capable LLM with your question. Answers drop into a panel below the pill.
+- **Talk to your screen.** Hit the **Mic** button to dictate a prompt — ElevenLabs Scribe transcribes it straight into the ask field. Toggle **Auto-speak responses** in settings and answers come back as natural ElevenLabs voice (any voice from your account's catalog).
 - **Bring your own model.** Pulls the live OpenRouter catalog so you can pick any model — free or paid, text or vision, mainstream or specialty — with metadata badges (FREE / VISION / AUDIO / context size / pricing) to help you choose.
 - **Tune the look.** Glass-style translucency with a live opacity slider in settings, applied to the pill and the settings panel both.
-- **Stay private.** Captures live in RAM only. A **Panic** button wipes the buffer in one click. Your API key is encrypted with OS-level safe storage when available.
+- **Stay private.** Captures live in RAM only. A **Panic** button wipes the buffer in one click. API keys are encrypted with OS-level safe storage when available.
 
 ---
 
@@ -25,6 +26,7 @@ A product of **Astra One** by [MR Dula Solutions](#about), a DBA of MR Dula Ente
 - **macOS** 13+ (tested on macOS Sequoia)
 - **Node.js** 20 or newer
 - A free or paid **OpenRouter** account ([openrouter.ai](https://openrouter.ai))
+- *(Optional, for voice)* an **ElevenLabs** account ([elevenlabs.io](https://elevenlabs.io)) — needed only if you want mic transcription or spoken answers
 
 ### Install & run
 
@@ -42,6 +44,7 @@ The Astra Dock pill will float to the top of your primary display.
 1. **Grant Screen Recording.** macOS will prompt the first time you capture. If you miss it: **System Settings → Privacy & Security → Screen Recording → toggle on for Electron** (and restart the app).
 2. **Add your OpenRouter key.** Click ⚙ → paste your key from [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) → **Save API key**.
 3. **Pick a model.** In the same settings panel, filter by **Vision** (essential for screenshot questions), search by name, and click a model row to set it.
+4. *(Optional)* **Enable voice.** In the ElevenLabs section: paste an ElevenLabs key, save, pick a voice from the auto-loaded catalog, and toggle **Speak answers automatically** if you want every reply read aloud. macOS will ask for microphone access the first time you tap Mic.
 
 ### Daily usage
 
@@ -65,6 +68,9 @@ Everything lives in the settings panel (⚙ button on the pill):
 | **OpenRouter key** | Authenticates chat completions and the model catalog. Stored encrypted via `safeStorage` when available. |
 | **Model** | The chat/vision model used for **Ask**. Browse the live catalog with filter chips and per-model metadata. |
 | **Pill transparency** | Adjusts the glass alpha across the pill, reply panel, and settings panel. |
+| **ElevenLabs key** | Authenticates Scribe (STT) and TTS calls. Stored encrypted via `safeStorage` when available. |
+| **Voice** | The ElevenLabs voice used for spoken answers. Live catalog from `/v1/voices`, searchable, filterable by category. |
+| **Speak answers automatically** | When on, every answer is read aloud immediately. The reply panel's 🔊 button works manually either way. |
 | **Keyboard shortcuts** | Reference card; shortcuts are non-rebindable in v0.1. |
 
 Preferences persist to `~/Library/Application Support/astra-dock/prefs.json`.
@@ -90,8 +96,8 @@ Preferences persist to `~/Library/Application Support/astra-dock/prefs.json`.
 | Live OpenRouter model catalog with vision/audio metadata | ✅ shipping |
 | In-shell reply panel with auto-sizing + copy | ✅ shipping |
 | Always-on-top above menu bar and fullscreen apps | ✅ shipping |
-| 🎙 Voice input (speech-to-text) | 🚧 next |
-| 🔊 Spoken responses (text-to-speech) | 🚧 next |
+| 🎙 Voice input via ElevenLabs Scribe | ✅ shipping |
+| 🔊 Spoken responses via ElevenLabs Flash v2.5 | ✅ shipping |
 | Signed `.dmg` distribution | 🔜 planned |
 | Windows / Linux builds | 🔜 evaluating |
 
@@ -109,12 +115,12 @@ If you are interested in commercial licensing, evaluation, or partnership, see [
 
 ## About
 
-**Astra One** is the assistant product line from **MR Dula Solutions**, a DBA of MR Dula Enterprise, LLC.
+**Astra One** is the assistant product line from **MR Dula Solutions**, a DBA of MR Dula Enterprise, LLC. Based in Wake County, North Carolina.
 
-For licensing inquiries, support, or partnership questions, please contact MR Dula Solutions through the channels listed at the company website (placeholder — update before public release).
+For licensing inquiries, support, or partnership questions: **[matt@mrdula.solutions](mailto:matt@mrdula.solutions)**.
 
 ---
 
 ## Acknowledgments
 
-Built on [Electron](https://www.electronjs.org/) (MIT) with Chromium components, and uses [OpenRouter](https://openrouter.ai/) as the LLM gateway. Full third-party attribution in [NOTICE.md](NOTICE.md).
+Built on [Electron](https://www.electronjs.org/) (MIT) with Chromium components. LLM routing via [OpenRouter](https://openrouter.ai/). Voice transcription and text-to-speech via [ElevenLabs](https://elevenlabs.io/) (Scribe + Flash v2.5). Full third-party attribution in [NOTICE.md](NOTICE.md).

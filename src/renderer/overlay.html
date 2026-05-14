@@ -21,6 +21,10 @@
 
         <button type="button" class="pill-btn" id="btnCapScreen" title="Capture primary screen">Screen</button>
         <button type="button" class="pill-btn" id="btnCapWindow" title="Capture frontmost window">Window</button>
+        <button type="button" class="pill-btn pill-mic" id="btnMic" title="Record voice → transcribes into the prompt">
+          <span class="mic-dot" aria-hidden="true"></span>
+          <span class="mic-label">Mic</span>
+        </button>
 
         <textarea
           id="prompt"
@@ -43,6 +47,7 @@
         <div class="reply-head">
           <span class="reply-label">Answer</span>
           <div class="reply-actions">
+            <button type="button" class="pill-btn pill-btn-ghost" id="btnReplySpeak" title="Speak answer with ElevenLabs">🔊 Speak</button>
             <button type="button" class="pill-btn pill-btn-ghost" id="btnReplyCopy" title="Copy answer">Copy</button>
             <button type="button" class="pill-btn pill-btn-ghost" id="btnReplyClose" title="Dismiss">×</button>
           </div>
@@ -105,6 +110,53 @@
               <ul class="model-list" id="modelList" role="listbox" aria-label="Models"></ul>
               <div class="model-meta" id="modelMeta">Loading model catalog from OpenRouter…</div>
             </label>
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h2 class="settings-section-title">ElevenLabs · Voice</h2>
+            <p class="settings-section-sub">
+              Microphone transcription (Scribe) and spoken answers (Flash v2.5). Get a key at
+              <a href="https://elevenlabs.io/app/settings/api-keys" id="linkElevenLabsKeys">elevenlabs.io → Profile → API keys</a>.
+            </p>
+          </div>
+          <div class="settings-grid settings-grid--audio">
+            <div class="settings-col">
+              <label class="field">
+                <span>ElevenLabs key</span>
+                <input type="password" id="elevenlabsKey" autocomplete="off" placeholder="" />
+              </label>
+              <button type="button" class="pill-btn pill-btn-primary wide" id="btnSaveElevenKey">Save ElevenLabs key</button>
+              <label class="field">
+                <div class="field-row">
+                  <span>Speak answers automatically</span>
+                  <input type="checkbox" id="ttsAutoSpeak" class="pill-toggle" />
+                </div>
+              </label>
+            </div>
+            <div class="settings-col">
+              <label class="field">
+                <div class="field-row">
+                  <span>Voice</span>
+                  <button type="button" class="link-btn" id="btnRefreshVoices" title="Refetch voices from ElevenLabs">↻ Refresh</button>
+                </div>
+                <input
+                  type="text"
+                  id="voiceSearch"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="Search voices by name, accent, or gender…"
+                />
+                <div class="model-filters" id="voiceFilters">
+                  <button type="button" class="chip is-active" data-vfilter="all">All</button>
+                  <button type="button" class="chip" data-vfilter="premade">Premade</button>
+                  <button type="button" class="chip" data-vfilter="cloned">Cloned</button>
+                  <button type="button" class="chip" data-vfilter="professional">Professional</button>
+                </div>
+                <ul class="model-list" id="voiceList" role="listbox" aria-label="ElevenLabs voices"></ul>
+                <div class="model-meta" id="voiceMeta">Add an ElevenLabs key to load voices.</div>
+              </label>
+            </div>
           </div>
         </div>
       </div>

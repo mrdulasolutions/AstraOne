@@ -59,9 +59,13 @@ function showAnswer(text) {
   body.textContent = String(text || '');
   panel.classList.remove('is-hidden');
   scheduleResizeToPill();
+  if (ttsAutoSpeak && text && text.trim()) {
+    void speakAnswer(text);
+  }
 }
 
 function clearAnswer() {
+  stopTts();
   const panel = $('replyPanel');
   if (!panel) return;
   panel.classList.add('is-hidden');
@@ -79,8 +83,12 @@ function setStatus(state) {
 
 function openSettings() {
   $('settingsPanel')?.classList.remove('is-hidden');
-  // Lazy-load the catalog the first time settings opens (and refresh if cache is stale).
+  // Lazy-load the catalogs the first time settings opens (and refresh if cache is stale).
   void loadModels(false);
+  void (async () => {
+    const k = await window.glass.getElevenLabsKeyPresent();
+    if (k.present) loadVoices(false);
+  })();
   scheduleResizeToPill();
 }
 
@@ -115,6 +123,18 @@ function applyPillOpacity(alpha) {
 let modelCatalog = [];
 let modelFilter = 'all';
 let currentModelId = '';
+
+let voiceCatalog = [];
+let voiceFilter = 'all';
+let currentVoiceId = '';
+let ttsAutoSpeak = false;
+
+let micRecorder = null;
+let micStream = null;
+let micChunks = [];
+let micMime = 'audio/webm;codecs=opus';
+
+let currentTtsAudio = null;
 
 function formatPricePerMillion(perToken) {
   if (!perToken || perToken === 0) return 'free';
@@ -206,6 +226,204 @@ function renderModelMeta(id) {
   `;
 }
 
+// ——— ElevenLabs: voice catalog ———
+
+function voiceMatchesFilter(v, filter) {
+  if (filter === 'premade') return v.category === 'premade';
+  if (filter === 'cloned') return v.category === 'cloned';
+  if (filter === 'professional') return v.category === 'professional' || v.category === 'generated';
+  return true;
+}
+
+function rebuildVoiceList() {
+  const list = $('voiceList');
+  const search = $('voiceSearch');
+  if (!list) return;
+  if (!voiceCatalog.length) {
+    list.innerHTML = '';
+    return;
+  }
+  const q = (search?.value || '').toLowerCase().trim();
+  const filtered = voiceCatalog.filter((v) => {
+    if (!voiceMatchesFilter(v, voiceFilter)) return false;
+    if (!q) return true;
+    if (v.name.toLowerCase().includes(q)) return true;
+    const labelText = Object.values(v.labels || {}).join(' ').toLowerCase();
+    if (labelText.includes(q)) return true;
+    return false;
+  });
+  filtered.sort((a, b) => a.name.localeCompare(b.name));
+  if (!filtered.length) {
+    list.innerHTML = '<li class="model-empty">No voices match the filter or search.</li>';
+    return;
+  }
+  list.innerHTML = filtered.slice(0, 200).map((v) => {
+    const labelKeys = ['gender', 'accent', 'age', 'use_case', 'descriptive'];
+    const tags = labelKeys
+      .map((k) => v.labels?.[k])
+      .filter(Boolean)
+      .map((t) => `<span class="badge">${escapeHtml(String(t))}</span>`);
+    if (v.category) tags.unshift(`<span class="badge">${escapeHtml(v.category)}</span>`);
+    const sel = v.voice_id === currentVoiceId ? ' is-selected' : '';
+    return `<li class="model-row${sel}" data-vid="${escapeHtml(v.voice_id)}" role="option" aria-selected="${v.voice_id === currentVoiceId}">
+      <div class="model-row-name">${escapeHtml(v.name)}</div>
+      <div class="model-row-id">${escapeHtml(v.voice_id)}</div>
+      <div class="model-row-tags">${tags.join('')}</div>
+    </li>`;
+  }).join('');
+}
+
+function renderVoiceMeta(id) {
+  const meta = $('voiceMeta');
+  if (!meta) return;
+  if (!voiceCatalog.length) {
+    meta.textContent = 'Add an ElevenLabs key, then click ↻ Refresh to load voices.';
+    return;
+  }
+  if (!id) {
+    meta.textContent = 'Pick a voice from the list above.';
+    return;
+  }
+  const v = voiceCatalog.find((x) => x.voice_id === id);
+  if (!v) {
+    meta.innerHTML = `<div class="meta-desc">Selected: <code>${escapeHtml(id)}</code> (not in fetched catalog).</div>`;
+    return;
+  }
+  const labels = Object.entries(v.labels || {})
+    .map(([k, val]) => `<span class="badge">${escapeHtml(k)}: ${escapeHtml(String(val))}</span>`)
+    .join('');
+  meta.innerHTML = `
+    <div class="meta-row"><strong>${escapeHtml(v.name)}</strong> &nbsp;<span style="font-size:10px;opacity:.55;font-family:ui-monospace,monospace;">${escapeHtml(v.voice_id)}</span></div>
+    ${labels ? `<div class="meta-row">${labels}</div>` : ''}
+    ${v.description ? `<div class="meta-desc">${escapeHtml(v.description)}</div>` : ''}
+  `;
+}
+
+async function loadVoices(force) {
+  const meta = $('voiceMeta');
+  if (meta) meta.textContent = 'Loading voices from ElevenLabs…';
+  const r = await window.glass.listVoices(force);
+  if (!r.ok) {
+    voiceCatalog = [];
+    rebuildVoiceList();
+    if (meta) meta.textContent = r.error || 'Could not load voices.';
+    return;
+  }
+  voiceCatalog = r.voices || [];
+  rebuildVoiceList();
+  renderVoiceMeta(currentVoiceId);
+}
+
+// ——— ElevenLabs: TTS playback ———
+
+function stopTts() {
+  if (currentTtsAudio) {
+    try { currentTtsAudio.pause(); } catch {}
+    currentTtsAudio.src = '';
+    currentTtsAudio = null;
+  }
+  updateSpeakBtn(false);
+}
+
+function updateSpeakBtn(speaking) {
+  const btn = $('btnReplySpeak');
+  if (!btn) return;
+  btn.textContent = speaking ? '⏹ Stop' : '🔊 Speak';
+  btn.classList.toggle('is-on', speaking);
+}
+
+async function speakAnswer(text) {
+  stopTts();
+  if (!text || !text.trim()) return;
+  const r = await window.glass.speakText({ text });
+  if (!r.ok) {
+    setReply(r.error || 'TTS failed');
+    return;
+  }
+  const audio = new Audio(`data:${r.mimeType || 'audio/mpeg'};base64,${r.base64}`);
+  currentTtsAudio = audio;
+  audio.onended = () => updateSpeakBtn(false);
+  audio.onerror = () => updateSpeakBtn(false);
+  updateSpeakBtn(true);
+  try { await audio.play(); } catch (e) {
+    updateSpeakBtn(false);
+    setReply(`Playback failed: ${e.message || e}`);
+  }
+}
+
+// ——— ElevenLabs: STT (mic recording) ———
+
+function updateMicBtn(recording) {
+  const btn = $('btnMic');
+  if (!btn) return;
+  btn.classList.toggle('is-recording', recording);
+  const label = btn.querySelector('.mic-label');
+  if (label) label.textContent = recording ? 'Stop' : 'Mic';
+  btn.title = recording ? 'Stop recording and transcribe' : 'Record voice → transcribes into the prompt';
+}
+
+async function startMicRecording() {
+  if (micRecorder) return;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setReply('Microphone not available in this environment.');
+    return;
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  } catch (e) {
+    setReply('Mic access denied. Allow in System Settings → Privacy & Security → Microphone, then restart.');
+    return;
+  }
+  micChunks = [];
+  micMime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : (MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : 'audio/webm');
+  micRecorder = new MediaRecorder(micStream, { mimeType: micMime });
+  micRecorder.ondataavailable = (e) => { if (e.data?.size) micChunks.push(e.data); };
+  micRecorder.onstop = onMicStopped;
+  micRecorder.start();
+  updateMicBtn(true);
+  setReply('Recording… click Stop or hit Mic again.');
+}
+
+async function onMicStopped() {
+  const stream = micStream;
+  micStream = null;
+  micRecorder = null;
+  updateMicBtn(false);
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  const chunks = micChunks;
+  micChunks = [];
+  if (!chunks.length) {
+    setReply('No audio captured.');
+    return;
+  }
+  setReply('Transcribing…');
+  const blob = new Blob(chunks, { type: micMime });
+  const buf = await blob.arrayBuffer();
+  const r = await window.glass.transcribeAudio({ audioBuffer: buf, mimeType: micMime });
+  if (!r.ok) {
+    setReply(r.error || 'Transcription failed');
+    return;
+  }
+  const promptEl = $('prompt');
+  if (promptEl) {
+    const existing = (promptEl.value || '').trim();
+    promptEl.value = existing ? `${existing} ${r.text}` : r.text;
+    promptEl.focus();
+    promptEl.selectionStart = promptEl.selectionEnd = promptEl.value.length;
+    syncPromptSize();
+  }
+  setReply('Transcribed.');
+}
+
+function stopMicRecording() {
+  if (!micRecorder) return;
+  try { micRecorder.stop(); } catch {}
+}
+
 async function loadModels(force) {
   const meta = $('modelMeta');
   if (meta) meta.textContent = 'Loading model catalog from OpenRouter…';
@@ -222,10 +440,19 @@ async function loadModels(force) {
 async function refreshState() {
   const s = await window.glass.getState();
   currentModelId = s.openrouterModel || '';
+  currentVoiceId = s.elevenlabsVoiceId || '';
+  ttsAutoSpeak = Boolean(s.ttsAutoSpeak);
   rebuildModelList();
   renderModelMeta(currentModelId);
+  rebuildVoiceList();
+  renderVoiceMeta(currentVoiceId);
+  const ttsToggle = $('ttsAutoSpeak');
+  if (ttsToggle) ttsToggle.checked = ttsAutoSpeak;
   const k = await window.glass.getOpenRouterKeyPresent();
   $('apiKey').placeholder = k.present ? 'Key on file — enter to replace' : 'sk-or-v1 key from openrouter.ai';
+  const ek = await window.glass.getElevenLabsKeyPresent();
+  const ekEl = $('elevenlabsKey');
+  if (ekEl) ekEl.placeholder = ek.present ? 'Key on file — enter to replace' : 'sk_… from elevenlabs.io';
   if (typeof s.pillOpacity === 'number') applyPillOpacity(s.pillOpacity);
   setStatus(s);
   scheduleResizeToPill();
@@ -315,6 +542,93 @@ function wire() {
       });
     });
   }
+
+  // ——— ElevenLabs settings wiring ———
+
+  const btnSaveEl = $('btnSaveElevenKey');
+  if (btnSaveEl) {
+    btnSaveEl.addEventListener('click', async () => {
+      const v = $('elevenlabsKey').value.trim();
+      const r = await window.glass.setElevenLabsKey(v);
+      $('elevenlabsKey').value = '';
+      setReply(r.saved ? 'ElevenLabs key saved.' : 'No change (enter a key to save).');
+      await refreshState();
+      if (r.saved) void loadVoices(true);
+    });
+  }
+
+  const voiceSearch = $('voiceSearch');
+  if (voiceSearch) voiceSearch.addEventListener('input', () => rebuildVoiceList());
+
+  const voiceListEl = $('voiceList');
+  if (voiceListEl) {
+    voiceListEl.addEventListener('click', async (e) => {
+      const row = e.target.closest('.model-row');
+      if (!row) return;
+      const id = row.dataset.vid;
+      if (!id) return;
+      currentVoiceId = id;
+      await window.glass.setElevenLabsVoice(id);
+      rebuildVoiceList();
+      renderVoiceMeta(id);
+    });
+  }
+
+  const voiceFiltersEl = $('voiceFilters');
+  if (voiceFiltersEl) {
+    voiceFiltersEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.chip');
+      if (!btn) return;
+      voiceFilter = btn.dataset.vfilter || 'all';
+      for (const c of voiceFiltersEl.querySelectorAll('.chip')) {
+        c.classList.toggle('is-active', c === btn);
+      }
+      rebuildVoiceList();
+    });
+  }
+
+  const refreshVoicesBtn = $('btnRefreshVoices');
+  if (refreshVoicesBtn) {
+    refreshVoicesBtn.addEventListener('click', () => {
+      refreshVoicesBtn.disabled = true;
+      const original = refreshVoicesBtn.textContent;
+      refreshVoicesBtn.textContent = '↻ Refreshing…';
+      void loadVoices(true).finally(() => {
+        refreshVoicesBtn.disabled = false;
+        refreshVoicesBtn.textContent = original;
+      });
+    });
+  }
+
+  const ttsToggle = $('ttsAutoSpeak');
+  if (ttsToggle) {
+    ttsToggle.addEventListener('change', async () => {
+      ttsAutoSpeak = ttsToggle.checked;
+      await window.glass.setTtsAutoSpeak(ttsToggle.checked);
+    });
+  }
+
+  const btnMic = $('btnMic');
+  if (btnMic) {
+    btnMic.addEventListener('click', () => {
+      if (micRecorder) stopMicRecording();
+      else void startMicRecording();
+    });
+  }
+
+  const btnSpeak = $('btnReplySpeak');
+  if (btnSpeak) {
+    btnSpeak.addEventListener('click', () => {
+      if (currentTtsAudio) stopTts();
+      else {
+        const text = $('replyBody')?.textContent || '';
+        if (text.trim()) void speakAnswer(text);
+      }
+    });
+  }
+
+  const linkElKeys = $('linkElevenLabsKeys');
+  if (linkElKeys) wireExternalLink(linkElKeys);
 
   const opacitySlider = $('pillOpacity');
   if (opacitySlider) {

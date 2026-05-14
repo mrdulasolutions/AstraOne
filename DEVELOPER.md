@@ -96,6 +96,13 @@ All preload-exposed IPC, with one-line descriptions. See `src/preload/preload.js
 | `setOpenRouterModel(model)` | Persist the selected model id |
 | `listModels(force)` | Fetch `/api/v1/models` (cached 30 min unless `force`) |
 | `setPillOpacity(opacity)` | Persist the glass alpha |
+| `setElevenLabsKey(key)` | Encrypt-and-save the ElevenLabs API key |
+| `getElevenLabsKeyPresent()` | Boolean: is an ElevenLabs key on file? |
+| `setElevenLabsVoice(voiceId)` | Persist the selected voice id |
+| `setTtsAutoSpeak(enabled)` | Persist whether answers auto-play on arrival |
+| `listVoices(force)` | Fetch ElevenLabs `/v1/voices` (cached 30 min) |
+| `transcribeAudio({ audioBuffer, mimeType })` | POST audio to ElevenLabs Scribe; returns transcript |
+| `speakText({ text, voiceId? })` | POST text to ElevenLabs TTS; returns `{ base64, mimeType }` MP3 |
 | `openExternal(url)` | Open an `https://` link in the user's browser |
 | `resizeToContent({ width, height })` | Renderer asks main to size the window to fit |
 | `setLayout(mode)` | Legacy no-op (settings now lives inside the pill window) |
@@ -110,8 +117,12 @@ All preload-exposed IPC, with one-line descriptions. See `src/preload/preload.js
 ### State & prefs
 
 - **Session state** (`sessionImageBase64`, `sessionImageMeta`, `captureArmed`) lives in main-process memory only. Never written to disk. Cleared by `Panic`.
-- **Prefs** persist to `~/Library/Application Support/astra-dock/prefs.json` via `app.getPath('userData')`.
-- **API keys** stored inside `prefs.json` under `apiKey_<provider>`, encrypted via `safeStorage.encryptString` when `safeStorage.isEncryptionAvailable()` (true on macOS with the user logged in), otherwise base64-encoded as a fallback.
+- **Prefs** persist to `~/Library/Application Support/astra-dock/prefs.json` via `app.getPath('userData')`. Notable keys:
+  - `openrouterModel` — chat/vision model id
+  - `pillOpacity` — `0.0`–`1.0`, drives `--surface-alpha`
+  - `elevenlabsVoiceId` — selected TTS voice
+  - `ttsAutoSpeak` — auto-play answers on arrival
+- **API keys** stored inside `prefs.json` under `apiKey_<provider>` (`openrouter`, `elevenlabs`), encrypted via `safeStorage.encryptString` when `safeStorage.isEncryptionAvailable()` (true on macOS with the user logged in), otherwise base64-encoded as a fallback.
 
 ### Capture pipeline
 
@@ -134,6 +145,42 @@ renderer btnAsk → glass.askLlm
 ```
 
 System prompt for chat completions is in `SYSTEM_PROMPT` (main process) and instructs the model to treat screen pixels and pasted content as untrusted data.
+
+### Audio pipeline (ElevenLabs)
+
+**Speech → text (Scribe):**
+
+```
+renderer btnMic click → navigator.mediaDevices.getUserMedia({ audio: ... })
+                             ↳ MediaRecorder('audio/webm;codecs=opus')
+                             ↳ chunks gathered while recording
+btnMic click again        → recorder.stop()
+                             ↳ Blob → ArrayBuffer → IPC glass:transcribeAudio
+main glass:transcribeAudio → multipart POST /v1/speech-to-text
+                             ↳ headers: xi-api-key
+                             ↳ form fields: file=<blob>, model_id=scribe_v1
+                             ↳ returns { text }
+renderer                  → prompt textarea ← transcript
+```
+
+**Text → speech (Flash v2.5):**
+
+```
+renderer btnReplySpeak    → IPC glass:speakText({ text })
+main glass:speakText      → POST /v1/text-to-speech/{voiceId}
+                             ↳ body: { text, model_id: 'eleven_flash_v2_5', voice_settings }
+                             ↳ headers: xi-api-key, accept: audio/mpeg
+                             ↳ returns binary MP3
+main                      → { base64, mimeType: 'audio/mpeg' }
+renderer                  → new Audio('data:audio/mpeg;base64,...').play()
+```
+
+Notes:
+- Audio buffers travel renderer → main as ArrayBuffers (not Blobs); Node's `Buffer.from(payload.audioBuffer)` reconstructs them main-side.
+- The ElevenLabs API key never enters the renderer process; only the main process holds it via `safeStorage`.
+- Voice catalog is cached in main memory for 30 minutes (`voicesCache`).
+- Default voice id `21m00Tcm4TlvDq8ikWAM` ("Rachel") is used until the user picks one explicitly.
+- Renderer tracks a single `currentTtsAudio` element so a new speak request cancels any in-flight playback cleanly.
 
 ### CSS variables
 
@@ -180,6 +227,9 @@ When this is set up, document the release process here.
 - **Window won't go on top of fullscreen apps** → `setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })` must be called after `show()` and re-asserted on every `showMainWindow()`.
 - **Reply panel renders 67px tall** → the `vh` unit refers to the Electron window's height, which is itself sized from content. Always use pixel caps or screen-derived values for panel heights.
 - **OpenRouter says "model not found"** → the user has typed an id that's not in the live catalog. Click the **↻ Refresh** button in settings to re-fetch.
+- **Mic button does nothing / "denied"** → macOS hasn't granted microphone access. Open **System Settings → Privacy & Security → Microphone**, enable for the Electron host, then restart Astra Dock. Unsigned dev builds run under Electron's bundle id; signed releases will need a `NSMicrophoneUsageDescription` entry in the bundle Info.plist (set via the packager when distribution is wired up).
+- **ElevenLabs voice list is empty** → no key is saved yet, OR the key is invalid. Save the key first, then click **↻ Refresh** in the Voice section.
+- **TTS sounds robotic / wrong voice** → confirm the selected voice id in `prefs.json` matches the desired voice. The default fallback is `21m00Tcm4TlvDq8ikWAM` (Rachel) until the user picks otherwise.
 
 ## Owner
 

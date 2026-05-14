@@ -41,6 +41,16 @@ const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const OPENROUTER_REFERER = 'https://github.com/mrdulasolutions/AstraOne';
 const OPENROUTER_TITLE = 'Astra Dock';
 
+const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
+const ELEVENLABS_STT_MODEL = 'scribe_v1';
+const ELEVENLABS_TTS_MODEL = 'eleven_flash_v2_5';
+// "Rachel" — a stable default if the user has not picked a voice yet.
+const DEFAULT_ELEVENLABS_VOICE_ID = '21m00Tcm4TlvDq8ikWAM';
+
+let voicesCache = null;
+let voicesCacheAt = 0;
+const VOICES_CACHE_MS = 30 * 60 * 1000;
+
 let modelsCache = null;
 let modelsCacheAt = 0;
 const MODELS_CACHE_MS = 30 * 60 * 1000;
@@ -68,6 +78,80 @@ function normalizeOpenRouterModel(m) {
   };
 }
 
+async function fetchElevenLabsVoices(apiKey, force) {
+  const now = Date.now();
+  if (!force && voicesCache && now - voicesCacheAt < VOICES_CACHE_MS) {
+    return voicesCache;
+  }
+  if (!apiKey) throw new Error('No ElevenLabs API key.');
+  const res = await fetch(`${ELEVENLABS_BASE}/voices`, {
+    headers: { 'xi-api-key': apiKey },
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`ElevenLabs voices ${res.status}: ${t.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  const list = Array.isArray(data?.voices) ? data.voices : [];
+  voicesCache = list.map((v) => ({
+    voice_id: String(v.voice_id),
+    name: String(v.name || v.voice_id),
+    category: String(v.category || ''),
+    description: String(v.description || '').slice(0, 400),
+    labels: v.labels && typeof v.labels === 'object' ? v.labels : {},
+    preview_url: typeof v.preview_url === 'string' ? v.preview_url : null,
+  }));
+  voicesCacheAt = now;
+  return voicesCache;
+}
+
+async function transcribeWithElevenLabs(apiKey, audioBuffer, mimeType) {
+  if (!apiKey) throw new Error('No ElevenLabs API key.');
+  if (!audioBuffer || !audioBuffer.byteLength) throw new Error('Empty audio buffer.');
+  const ext = (mimeType || '').includes('mp4') ? 'm4a' :
+              (mimeType || '').includes('wav') ? 'wav' :
+              (mimeType || '').includes('mpeg') ? 'mp3' : 'webm';
+  const form = new FormData();
+  form.append('file', new Blob([audioBuffer], { type: mimeType || 'audio/webm' }), `clip.${ext}`);
+  form.append('model_id', ELEVENLABS_STT_MODEL);
+  const res = await fetch(`${ELEVENLABS_BASE}/speech-to-text`, {
+    method: 'POST',
+    headers: { 'xi-api-key': apiKey },
+    body: form,
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`ElevenLabs STT ${res.status}: ${t.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  return String(data?.text || '').trim();
+}
+
+async function synthesizeSpeechWithElevenLabs(apiKey, voiceId, text) {
+  if (!apiKey) throw new Error('No ElevenLabs API key.');
+  if (!voiceId) voiceId = DEFAULT_ELEVENLABS_VOICE_ID;
+  const body = {
+    text: String(text || '').slice(0, 5000),
+    model_id: ELEVENLABS_TTS_MODEL,
+    voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0, use_speaker_boost: true },
+  };
+  const res = await fetch(`${ELEVENLABS_BASE}/text-to-speech/${encodeURIComponent(voiceId)}`, {
+    method: 'POST',
+    headers: {
+      'xi-api-key': apiKey,
+      'content-type': 'application/json',
+      accept: 'audio/mpeg',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`ElevenLabs TTS ${res.status}: ${t.slice(0, 300)}`);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { base64: buf.toString('base64'), mimeType: 'audio/mpeg' };
+}
+
 async function fetchOpenRouterModels(force) {
   const now = Date.now();
   if (!force && modelsCache && now - modelsCacheAt < MODELS_CACHE_MS) {
@@ -93,9 +177,17 @@ function loadPrefs() {
       j.openrouterModel = DEFAULT_OPENROUTER_MODEL;
     }
     j.pillOpacity = clampOpacity(j.pillOpacity ?? DEFAULT_PILL_OPACITY);
+    j.elevenlabsVoiceId = typeof j.elevenlabsVoiceId === 'string' && j.elevenlabsVoiceId
+      ? j.elevenlabsVoiceId : DEFAULT_ELEVENLABS_VOICE_ID;
+    j.ttsAutoSpeak = Boolean(j.ttsAutoSpeak);
     return j;
   } catch {
-    return { openrouterModel: DEFAULT_OPENROUTER_MODEL, pillOpacity: DEFAULT_PILL_OPACITY };
+    return {
+      openrouterModel: DEFAULT_OPENROUTER_MODEL,
+      pillOpacity: DEFAULT_PILL_OPACITY,
+      elevenlabsVoiceId: DEFAULT_ELEVENLABS_VOICE_ID,
+      ttsAutoSpeak: false,
+    };
   }
 }
 
@@ -408,6 +500,8 @@ function setupIpc() {
       sessionMeta: sessionImageMeta,
       openrouterModel: prefs.openrouterModel || DEFAULT_OPENROUTER_MODEL,
       pillOpacity: clampOpacity(prefs.pillOpacity ?? DEFAULT_PILL_OPACITY),
+      elevenlabsVoiceId: prefs.elevenlabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID,
+      ttsAutoSpeak: Boolean(prefs.ttsAutoSpeak),
     };
   });
 
@@ -438,6 +532,67 @@ function setupIpc() {
   ipcMain.handle('glass:getOpenRouterKeyPresent', () => ({
     present: Boolean(getApiKey('openrouter')),
   }));
+
+  ipcMain.handle('glass:setElevenLabsKey', (_e, { key }) => {
+    const k = String(key || '').trim();
+    if (k) setApiKey('elevenlabs', k);
+    return { ok: true, saved: Boolean(k) };
+  });
+
+  ipcMain.handle('glass:getElevenLabsKeyPresent', () => ({
+    present: Boolean(getApiKey('elevenlabs')),
+  }));
+
+  ipcMain.handle('glass:setElevenLabsVoice', (_e, { voiceId }) => {
+    const prefs = loadPrefs();
+    const v = String(voiceId || '').trim();
+    prefs.elevenlabsVoiceId = v || DEFAULT_ELEVENLABS_VOICE_ID;
+    savePrefs(prefs);
+    return { ok: true, elevenlabsVoiceId: prefs.elevenlabsVoiceId };
+  });
+
+  ipcMain.handle('glass:setTtsAutoSpeak', (_e, { enabled }) => {
+    const prefs = loadPrefs();
+    prefs.ttsAutoSpeak = Boolean(enabled);
+    savePrefs(prefs);
+    return { ok: true, ttsAutoSpeak: prefs.ttsAutoSpeak };
+  });
+
+  ipcMain.handle('glass:listVoices', async (_e, payload) => {
+    const apiKey = getApiKey('elevenlabs');
+    if (!apiKey) return { ok: false, error: 'No ElevenLabs API key. Add one in Settings.' };
+    try {
+      const voices = await fetchElevenLabsVoices(apiKey, Boolean(payload?.force));
+      return { ok: true, voices };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('glass:transcribeAudio', async (_e, payload) => {
+    const apiKey = getApiKey('elevenlabs');
+    if (!apiKey) return { ok: false, error: 'No ElevenLabs API key. Add one in Settings.' };
+    try {
+      const buf = payload?.audioBuffer ? Buffer.from(payload.audioBuffer) : null;
+      const text = await transcribeWithElevenLabs(apiKey, buf, payload?.mimeType);
+      return { ok: true, text };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('glass:speakText', async (_e, payload) => {
+    const apiKey = getApiKey('elevenlabs');
+    if (!apiKey) return { ok: false, error: 'No ElevenLabs API key. Add one in Settings.' };
+    const prefs = loadPrefs();
+    const voiceId = String(payload?.voiceId || prefs.elevenlabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID);
+    try {
+      const out = await synthesizeSpeechWithElevenLabs(apiKey, voiceId, String(payload?.text || ''));
+      return { ok: true, ...out };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  });
 
   ipcMain.handle('glass:setOpenRouterModel', (_e, { model }) => {
     const prefs = loadPrefs();

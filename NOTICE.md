@@ -21,3 +21,7 @@ The `scripts/check-licenses.mjs` script enforces a permissive-only policy: any G
 ## OpenRouter
 
 Astra Dock calls the [OpenRouter](https://openrouter.ai) HTTP API to route chat-completion requests to third-party model providers chosen by the user. OpenRouter, the upstream model providers, and any models invoked are governed by their own terms; Astra Dock does not redistribute them.
+
+## ElevenLabs
+
+Astra Dock optionally calls the [ElevenLabs](https://elevenlabs.io) HTTP API for two features: speech-to-text transcription (Scribe model) and text-to-speech synthesis (Flash v2.5 model). Audio uploaded to ElevenLabs and audio synthesized by ElevenLabs are governed by ElevenLabs' terms of service; Astra Dock does not redistribute ElevenLabs models or voice data.

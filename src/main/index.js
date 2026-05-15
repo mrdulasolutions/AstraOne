@@ -244,15 +244,28 @@ function decryptKey(stored) {
   return buf.toString('utf8');
 }
 
+/**
+ * API keys travel through HTTP headers, which can only carry Latin-1 (byte values
+ * 0-255). macOS auto-substitution can sneak Unicode characters (curly quotes,
+ * ellipses, en-dashes) into pasted keys; left untreated they crash fetch() with
+ * "Cannot convert argument to a ByteString". Strip everything outside printable
+ * ASCII at both ends of the persistence boundary.
+ */
+function sanitizeApiKey(raw) {
+  if (raw == null) return '';
+  return String(raw).replace(/[^\x21-\x7E]+/g, '');
+}
+
 function setApiKey(provider, key) {
   const prefs = loadPrefs();
-  prefs[`apiKey_${provider}`] = encryptKey(key);
+  const clean = sanitizeApiKey(key);
+  prefs[`apiKey_${provider}`] = encryptKey(clean);
   savePrefs(prefs);
 }
 
 function getApiKey(provider) {
   const prefs = loadPrefs();
-  return decryptKey(prefs[`apiKey_${provider}`] || '');
+  return sanitizeApiKey(decryptKey(prefs[`apiKey_${provider}`] || ''));
 }
 
 function broadcastState() {
@@ -601,22 +614,35 @@ function setupIpc() {
     };
   });
 
-  ipcMain.handle('glass:resizeToContent', (_e, { width, height }) => {
+  ipcMain.handle('glass:resizeToContent', (_e, payload = {}) => {
     if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
     const { wa, y, maxH } = pillLayoutMetrics();
     const margin = 12;
-    const w = Math.min(wa.width - margin * 2, Math.max(MIN_PILL_WIDTH, Math.ceil(Number(width)) || 1280));
-    const h = Math.min(maxH, Math.max(MIN_PILL_HEIGHT, Math.ceil(Number(height)) || 112));
+    const w = Math.min(wa.width - margin * 2, Math.max(MIN_PILL_WIDTH, Math.ceil(Number(payload.width)) || 1280));
+    const h = Math.min(maxH, Math.max(MIN_PILL_HEIGHT, Math.ceil(Number(payload.height)) || 112));
     pillWindowSize = { width: w, height: h };
     const x = Math.floor(wa.x + (wa.width - w) / 2);
-    mainWindow.setBounds({ x, y, width: w, height: h }, false);
+    // animate: true uses macOS's native smooth resize animation. Without it, a
+    // 50→700px height jump reads as a sudden "stretch" because the inner content
+    // layout finishes before the OS finishes painting the larger window. The
+    // native animation glues the two together visually.
+    mainWindow.setBounds({ x, y, width: w, height: h }, true);
     return { ok: true };
   });
 
   ipcMain.handle('glass:setOpenRouterKey', (_e, { key }) => {
-    const k = String(key || '').trim();
-    if (k) setApiKey('openrouter', k);
-    return { ok: true, saved: Boolean(k) };
+    const original = String(key || '').trim();
+    const sanitized = sanitizeApiKey(original);
+    if (sanitized) setApiKey('openrouter', sanitized);
+    return {
+      ok: true,
+      saved: Boolean(sanitized),
+      sanitizedLength: sanitized.length,
+      originalLength: original.length,
+      stripped: original.length - sanitized.length,
+      prefix: sanitized.slice(0, 12),
+      looksValid: /^sk-or-v1-[a-z0-9]{20,}$/i.test(sanitized),
+    };
   });
 
   ipcMain.handle('glass:openExternal', (_e, { url }) => {
@@ -625,9 +651,26 @@ function setupIpc() {
     return shell.openExternal(u).then(() => ({ ok: true })).catch((err) => ({ ok: false, error: String(err.message || err) }));
   });
 
-  ipcMain.handle('glass:getOpenRouterKeyPresent', () => ({
-    present: Boolean(getApiKey('openrouter')),
-  }));
+  ipcMain.handle('glass:getOpenRouterKeyPresent', () => {
+    const k = getApiKey('openrouter');
+    return {
+      present: Boolean(k),
+      prefix: k ? k.slice(0, 12) : '',
+      length: k.length,
+      looksValid: /^sk-or-v1-[a-z0-9]{20,}$/i.test(k),
+    };
+  });
+
+  ipcMain.handle('glass:clearProviderKey', (_e, payload = {}) => {
+    const providerId = String(payload.providerId || '');
+    if (!['openrouter', 'anthropic', 'elevenlabs'].includes(providerId)) {
+      return { ok: false, error: 'invalid provider' };
+    }
+    const prefs = loadPrefs();
+    delete prefs[`apiKey_${providerId}`];
+    savePrefs(prefs);
+    return { ok: true };
+  });
 
   ipcMain.handle('glass:setElevenLabsKey', (_e, { key }) => {
     const k = String(key || '').trim();

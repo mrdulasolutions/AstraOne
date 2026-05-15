@@ -17,27 +17,52 @@ Internal-facing notes for engineers working on the Astra Dock codebase. For end-
 ```
 app/
 ├── src/
-│   ├── main/           # Electron main process
-│   │   └── index.js    # Window, IPC, capture, OpenRouter calls
-│   ├── preload/        # Bridges main ↔ renderer
-│   │   └── preload.js  # exposes window.glass.*
-│   ├── renderer/       # UI (Chromium renderer)
+│   ├── main/                         # Electron main process
+│   │   ├── index.js                  # Window, lifecycle, IPC surface, prefs
+│   │   ├── agents/
+│   │   │   └── router.js             # Tool-call loop (run, cancel, events, bounds)
+│   │   ├── providers/
+│   │   │   ├── openrouter.js         # OpenAI-shape provider + retry on 429/503
+│   │   │   └── anthropic.js          # @anthropic-ai/sdk; tool_use/tool_result blocks
+│   │   ├── tools/
+│   │   │   ├── registry.js           # Tool registry + schema normalizers
+│   │   │   ├── permissions.js        # effect × policy, session grants, cross-server escalation
+│   │   │   ├── auditLog.js           # Append-only JSONL with rotation + redaction
+│   │   │   ├── schemaLinter.js       # Warnings + effect inference for MCP tools
+│   │   │   ├── mcpClient.js          # Stdio + Streamable HTTP MCP client manager
+│   │   │   └── builtins/
+│   │   │       └── capture.js        # astra.capture_primary_screen / capture_active_window
+│   │   └── util/
+│   │       └── shellEnv.js           # Login-shell PATH capture for packaged Electron
+│   ├── preload/
+│   │   └── preload.js                # Context-bridged window.glass.* API
+│   ├── renderer/                     # UI (Chromium renderer, sandboxed)
 │   │   ├── overlay.html
 │   │   ├── overlay.css
 │   │   ├── overlay.js
 │   │   └── assets/
 │   │       └── astra-dock.svg
 ├── scripts/
-│   └── check-licenses.mjs   # Blocks GPL/LGPL/AGPL deps
-├── tests/
-│   └── policy.test.mjs      # Unit test for the copyleft detector
+│   └── check-licenses.mjs            # Blocks GPL/LGPL/AGPL deps
+├── tests/                            # Node native test runner; no fixtures dir
+│   ├── policy.test.mjs               # Copyleft detector
+│   ├── registry.test.mjs             # Tool registry shape + schema normalization
+│   ├── permissions.test.mjs          # Policy matrix + escalation rules
+│   ├── auditLog.test.mjs             # Hash, redact, rotate, tail
+│   ├── router.test.mjs               # Tool-call loop with a fake provider
+│   ├── providers.openrouter.test.mjs # OpenAI-shape conversion
+│   ├── providers.anthropic.test.mjs  # Anthropic tool_use/tool_result conversion
+│   ├── schemaLinter.test.mjs         # Sensitive/path/exec field detection
+│   └── mcpClient.test.mjs            # stdio + http transports against a mock SDK
+├── docs/
+│   └── wiki/                         # Canonical source for the GitHub wiki
 ├── .github/
 │   └── workflows/
-│       └── ci.yml           # licenses + tests on push/PR
+│       └── ci.yml                    # licenses + tests on push/PR (macOS)
 ├── package.json
 ├── LICENSE
 ├── README.md
-├── DEVELOPER.md       (this file)
+├── DEVELOPER.md                      (this file)
 ├── CONTRIBUTING.md
 └── NOTICE.md
 ```
@@ -63,13 +88,40 @@ Remove before committing — DevTools should not ship in release builds.
 
 ## Architecture overview
 
-Astra Dock is a standard three-process Electron app:
+Astra Dock is a three-process Electron app with the entire agent stack living in the main process.
 
-| Process | File | Responsibility |
+| Process | File(s) | Responsibility |
 |---|---|---|
-| **Main** | `src/main/index.js` | Window lifecycle, global shortcuts, system tray, screen capture via `desktopCapturer`, OpenRouter HTTP, prefs persistence, `safeStorage` for API keys |
-| **Preload** | `src/preload/preload.js` | Context-bridged API surface (`window.glass.*`). Sandboxed, no Node access in the renderer |
-| **Renderer** | `src/renderer/*` | UI rendering, drag/resize via `-webkit-app-region`, prompt textarea, settings panel, reply panel, model picker, transparency slider |
+| **Main** | `src/main/index.js` + `tools/` + `agents/` + `providers/` + `util/` | Window lifecycle, global shortcuts, system tray, screen capture via `desktopCapturer`, OpenRouter + Anthropic + ElevenLabs HTTP, MCP stdio + Streamable HTTP clients, prefs, `safeStorage` for API keys + MCP bearer tokens, tool registry, permissions, audit log, the tool-call loop |
+| **Preload** | `src/preload/preload.js` | Context-bridged API surface (`window.glass.*`). Sandboxed; no Node access in the renderer |
+| **Renderer** | `src/renderer/*` | UI rendering, drag/resize via `-webkit-app-region`, prompt textarea, settings panel, reply panel, approval card, model picker, voice picker, MCP server cards, transparency slider |
+
+### Main-process layering (PR-A → PR-C)
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  agents/router.js   ◀── tool-call loop (run / cancel / emit) │
+│      ▲                                                       │
+│      │ uses                                                  │
+│      ▼                                                       │
+│  tools/                                                      │
+│    registry.js           schema normalize + result encode    │
+│    permissions.js        effect × policy + session grants    │
+│    auditLog.js           JSONL append + rotate + redact      │
+│    schemaLinter.js       MCP tool warnings + effect inference│
+│    mcpClient.js          stdio + http MCP transport pool     │
+│    builtins/capture.js   astra.capture_* tools               │
+│                                                              │
+│  providers/                                                  │
+│    openrouter.js         OpenAI-shape + retry on 429/503     │
+│    anthropic.js          @anthropic-ai/sdk native            │
+│                                                              │
+│  util/                                                       │
+│    shellEnv.js           login-shell PATH for child_process  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+All deps are **injected** into `initAgentStack()` (called from `app.whenReady`) so each module is unit-testable without spinning up Electron.
 
 ### Window model
 
@@ -103,10 +155,17 @@ All preload-exposed IPC, with one-line descriptions. See `src/preload/preload.js
 | `listVoices(force)` | Fetch ElevenLabs `/v1/voices` (cached 30 min) |
 | `transcribeAudio({ audioBuffer, mimeType })` | POST audio to ElevenLabs Scribe; returns transcript |
 | `speakText({ text, voiceId? })` | POST text to ElevenLabs TTS; returns `{ base64, mimeType }` MP3 |
+| **`runAgent({ prompt, providerId, model, includeScreen })`** | Run the agent loop and return the final assistant text |
+| **`approveToolCall({ callId, decision })`** | Renderer's response to an `awaiting_approval` event: `'approve' \| 'deny' \| 'approve_server_session'` |
+| **`cancelAgentRun()`** | Abort the in-flight agent run |
+| **`getAuditLog({ limit })`** | Tail the audit log (last N entries) |
+| **`listTools()` / `setToolPolicy({ toolId, policy })`** | Inspect the registry; override per-tool policy |
+| **`setProvider({ providerId })` / `setProviderApiKey({ providerId, key })` / `getProviderKeyPresent({ providerId })` / `clearProviderKey({ providerId })`** | Provider abstraction surface (OpenRouter / Anthropic / ElevenLabs) |
+| **`listMcpServers()` / `addMcpServer(config)` / `removeMcpServer(id)` / `connectMcpServer(id)` / `disconnectMcpServer(id)` / `refreshMcpTools(id)` / `registerMcpTool({ serverId, toolName })` / `unregisterMcpTool({ serverId, toolName })` / `updateMcpServerAuth({ id, headers, bearerToken })` / `getMcpStderr(id)`** | MCP server pool management |
 | `openExternal(url)` | Open an `https://` link in the user's browser |
 | `resizeToContent({ width, height })` | Renderer asks main to size the window to fit |
 | `setLayout(mode)` | Legacy no-op (settings now lives inside the pill window) |
-| `onState(fn)` / `onHotkeyAsk(fn)` / `onPanicEvent(fn)` / `onForcePill(fn)` | Subscribe to state events from main |
+| `onState(fn)` / `onHotkeyAsk(fn)` / `onPanicEvent(fn)` / `onForcePill(fn)` / **`onToolEvent(fn)`** / **`onRequestApproval(fn)`** / **`onMcpStatus(fn)`** / **`onMcpRemoved(fn)`** | Subscribe to events from main |
 
 ### Adding a new IPC handler
 
@@ -117,12 +176,16 @@ All preload-exposed IPC, with one-line descriptions. See `src/preload/preload.js
 ### State & prefs
 
 - **Session state** (`sessionImageBase64`, `sessionImageMeta`, `captureArmed`) lives in main-process memory only. Never written to disk. Cleared by `Panic`.
+- **Audit log** at `~/Library/Application Support/astra-dock/audit.log` (JSONL, rotated at 10 MB → `audit.log.1`). Never holds API keys or screenshots — args are SHA-256 hashed by default; `redactionMode: 'redact'` keeps a redacted snapshot.
 - **Prefs** persist to `~/Library/Application Support/astra-dock/prefs.json` via `app.getPath('userData')`. Notable keys:
   - `openrouterModel` — chat/vision model id
   - `pillOpacity` — `0.0`–`1.0`, drives `--surface-alpha`
   - `elevenlabsVoiceId` — selected TTS voice
   - `ttsAutoSpeak` — auto-play answers on arrival
-- **API keys** stored inside `prefs.json` under `apiKey_<provider>` (`openrouter`, `elevenlabs`), encrypted via `safeStorage.encryptString` when `safeStorage.isEncryptionAvailable()` (true on macOS with the user logged in), otherwise base64-encoded as a fallback.
+  - `provider` — `'openrouter'` or `'anthropic'` (active brain)
+  - `toolPolicies` / `serverPolicies` — `{ id: 'auto' | 'prompt' | 'always-prompt' }`
+  - `mcpServers` — array of `{ id, type, … }` configs. `bearerToken_enc` is encrypted via `safeStorage`; the plaintext `bearerToken` only exists in memory.
+- **API keys** stored inside `prefs.json` under `apiKey_<provider>` (`openrouter`, `anthropic`, `elevenlabs`), encrypted via `safeStorage.encryptString` when `safeStorage.isEncryptionAvailable()` (true on macOS with the user logged in), otherwise base64-encoded as a fallback. **`sanitizeApiKey()`** strips non-printable / non-ASCII bytes on both read and write — fetch's `Authorization` header can't carry them, and macOS smart-quote substitution loves to sneak Unicode into pasted keys.
 
 ### Capture pipeline
 
@@ -182,6 +245,109 @@ Notes:
 - Default voice id `21m00Tcm4TlvDq8ikWAM` ("Rachel") is used until the user picks one explicitly.
 - Renderer tracks a single `currentTtsAudio` element so a new speak request cancels any in-flight playback cleanly.
 
+### Agent tool-call loop (PR-A)
+
+```
+btnAsk click
+   │
+   ▼
+runAgent({ prompt, providerId, model, includeScreen })
+   │
+   ▼
+router.run:
+   for iter in 0..maxIterations (8):
+     ▶ provider.chat({ apiKey, model, messages, tools, signal })
+     ▶ if response.toolCalls is empty → emit 'final' → return text
+     ▶ for each toolCall:
+         resolved tool = registry.get(decodeIdFromOpenAI(name))
+         decision = permissions.evaluate({ tool, recentServers })
+         if decision === 'prompt':
+           emit 'awaiting_approval'
+           decision = await awaitApproval(descriptor)
+         if approved:
+           result = await tool.handler(args, { runId, callId, signal })
+           append { role: tool_result, content: <tool_output untrusted>… }
+         else:
+           append synthetic error tool_result
+         auditLog.record(...)
+       loop continues
+```
+
+Bounds: 8 iterations × 90 s wall clock × external `AbortSignal`. One run at a time
+(`router.isRunning()`). Recent servers (newest first) drive cross-server escalation
+in `permissions.evaluate`.
+
+### Tool registry & schema normalization
+
+Internal tool ids are dot-namespaced (`astra.capture_active_window`, `mcp.github.list_repos`).
+Provider tool-name regexes only allow `[A-Za-z0-9_-]`, so the registry encodes
+dots → underscores when generating provider specs (`encodeIdForOpenAI`).
+`decodeIdFromOpenAI(encoded, registry)` walks the registry to find the original id
+when a model emits a `tool_call`.
+
+Tool results are encoded per provider:
+
+- OpenAI / OpenRouter: `{ role: 'tool', tool_call_id, content: <string> }`
+- Anthropic: `{ type: 'tool_result', tool_use_id, content, is_error? }` inside a `user` message
+
+Tool output is wrapped in `<tool_output server="…" untrusted>…</tool_output>` before
+being fed back to the model, and the system prompt instructs the model to treat
+that block as untrusted data — instructions inside MUST NOT bind behavior.
+
+### Permissions
+
+Two orthogonal axes:
+
+- **effect** (intrinsic, set at registration time): `read | write | exec`
+- **policy** (user-controlled, persisted): `auto | prompt | always-prompt`
+
+Defaults by effect: `read → auto`, `write → prompt`, `exec → always-prompt`.
+Resolution order (most-specific wins): per-tool policy → per-server policy → global → default.
+
+**Session grants**: `permissions.grantServerSession(serverId, ms)` records an in-memory
+expiry. While valid, tools from that server with effect `read`/`write` (NOT `exec`)
+resolve to `auto`. Grants never auto-execute `always-prompt` tools.
+
+**Cross-server escalation**: `write`/`exec` tools fired within `crossServerWindow`
+turns of a *different* server's tool result are force-prompted regardless of policy.
+This is the prompt-injection mitigation referenced in the system prompt.
+
+### MCP client (PR-B + PR-C)
+
+`mcpClient.js` manages a pool of MCP server connections:
+
+```
+add(config)  →  servers map entry, status='disconnected', persisted
+connect(id) →  status='connecting' →
+                 type==='stdio'  : spawn via SDK with shell:false + mergedSpawnEnv
+                 type==='http'   : StreamableHTTPClientTransport(url, requestInit:{headers})
+               client.connect(transport) → listTools → status='connected'
+disconnect(id) → close client+transport, unregister tools, status='disconnected'
+remove(id)     → disconnect + delete from prefs
+```
+
+Discovered MCP tools stay *outside* the central registry until the user clicks
+**Add to registry** (or **＋ Register all**). When registered:
+
+```
+id        = `mcp.<serverId>.<toolName>`
+source    = 'mcp'
+serverId  = <serverId>          ← lets permissions distinguish servers
+effect    = inferEffect(toolName)  ← schemaLinter heuristic
+handler   = (args, ctx) → client.callTool({ name, arguments: args }, undefined, { signal })
+jsonSchema = the MCP tool's input schema
+renderPreview = generic "Call serverId.toolName with: key=val, …" formatter
+```
+
+Bearer tokens for HTTP MCPs travel encrypted at rest (`bearerToken_enc` in
+prefs.json via `safeStorage`). In-memory configs carry plaintext `bearerToken`;
+`persistableMcpConfig()` / `hydratedMcpConfig()` (in `main/index.js`) swap between
+the two as configs cross the disk boundary. The renderer never sees the plaintext —
+serialization exposes only a `hasBearerToken: boolean` flag.
+
+The SDK is loaded via dynamic `import()` (the SDK is ESM-only; our main is CJS).
+`defaultLoadSdk(type)` lazily loads only the transport the caller needs.
+
 ### CSS variables
 
 - `--surface-alpha` — drives the glass background of the pill, reply panel, and settings panel. Controlled by the **Pill transparency** slider.
@@ -230,6 +396,13 @@ When this is set up, document the release process here.
 - **Mic button does nothing / "denied"** → macOS hasn't granted microphone access. Open **System Settings → Privacy & Security → Microphone**, enable for the Electron host, then restart Astra Dock. Unsigned dev builds run under Electron's bundle id; signed releases will need a `NSMicrophoneUsageDescription` entry in the bundle Info.plist (set via the packager when distribution is wired up).
 - **ElevenLabs voice list is empty** → no key is saved yet, OR the key is invalid. Save the key first, then click **↻ Refresh** in the Voice section.
 - **TTS sounds robotic / wrong voice** → confirm the selected voice id in `prefs.json` matches the desired voice. The default fallback is `21m00Tcm4TlvDq8ikWAM` (Rachel) until the user picks otherwise.
+- **Agent answers from the screenshot when an MCP is "connected"** → connecting a server doesn't auto-add its tools. Click **＋ Register all** on the server card (or pick tools individually). The amber banner at the top of MCP Servers warns when at least one server is connected with zero tools registered.
+- **OpenRouter 429 mid-run** → the agent loop can fire 1–3 chat completions in quick succession (think → call tool → respond). Free-tier models with strict per-minute caps trip this. The provider auto-retries once after 1.5 s on 429/503; if it still fails, switch to a paid tool-capable model (`anthropic/claude-3-5-sonnet`, `openai/gpt-4o-mini`) in ⚙ → Model.
+- **OpenRouter 401 "Missing Authentication header"** → key is truncated/malformed. The `apiKey` placeholder shows the saved prefix + length + a ⚠ when the format doesn't match `sk-or-v1-…`. Click **Clear** next to the key field, then paste a fresh key with `⌥⌘V` (paste-without-formatting).
+- **"Cannot convert argument to a ByteString" before any request** → key contains a non-Latin-1 character (commonly `…` from macOS smart-quote auto-substitution). The sanitizer strips it on read; a Clear + re-paste fixes the underlying corruption.
+- **MCP stdio: "command not found" or silent spawn failure** → packaged Electron launched from Finder doesn't inherit the user's full `PATH`. `shellEnv.js` mitigates this by capturing the login-shell env once. For an absolute fix, configure the MCP server with an absolute command path (`/opt/homebrew/bin/npx` etc.). The card surfaces a warning when the command isn't absolute.
+- **MCP HTTP: handshake works in browser but fails in Astra** → Electron's undici sometimes mishandles SSE-only servers. PR-C added Streamable HTTP only; if a server speaks SSE classic, that's PR-roadmap territory.
+- **Settings panel "stretches" when opened** → the OS window growth from ~50 px to ~700 px is what you're seeing. `setBounds(..., true)` uses macOS's native smooth resize animation; the CSS animation on the panel is intentionally a no-op to avoid fighting it.
 
 ## Owner
 

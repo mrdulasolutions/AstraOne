@@ -89,26 +89,37 @@ async function chat({ apiKey, model, messages, tools, maxTokens = 2048, signal }
   };
   if (Array.isArray(tools) && tools.length) body.tools = tools;
 
-  const res = await fetch(OPENROUTER_CHAT_URL, {
-    method: 'POST',
-    signal,
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${apiKey}`,
-      'HTTP-Referer': REFERER,
-      'X-OpenRouter-Title': TITLE,
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
+  // Up to 2 attempts on 429 / 503 with a short backoff before propagating.
+  const attempts = [0, 1500];
+  let lastErr = null;
+  for (let i = 0; i < attempts.length; i++) {
+    if (attempts[i] > 0) {
+      await new Promise((r) => setTimeout(r, attempts[i]));
+      if (signal?.aborted) throw new Error('aborted');
+    }
+    const res = await fetch(OPENROUTER_CHAT_URL, {
+      method: 'POST',
+      signal,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
+        'HTTP-Referer': REFERER,
+        'X-OpenRouter-Title': TITLE,
+      },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return parseOpenAIResponse(data);
+    }
     const t = await res.text();
-    const err = new Error(`OpenRouter ${res.status}: ${t.slice(0, 500)}`);
-    err.status = res.status;
-    err.bodyText = t;
-    throw err;
+    lastErr = new Error(`OpenRouter ${res.status}: ${t.slice(0, 600)}`);
+    lastErr.status = res.status;
+    lastErr.bodyText = t;
+    // Only retry on transient rate-limit / overload.
+    if (res.status !== 429 && res.status !== 503) break;
   }
-  const data = await res.json();
-  return parseOpenAIResponse(data);
+  throw lastErr;
 }
 
 function parseOpenAIResponse(data) {

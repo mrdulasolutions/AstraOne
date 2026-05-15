@@ -267,13 +267,14 @@ function createMcpClient(deps = {}) {
 
   function buildHttpHeaders(cfg) {
     const out = {};
-    // user-provided custom headers first
+    // Strip non-Latin-1 chars defensively — HTTP header values cannot carry them
+    // (e.g. macOS auto-substituted ellipses/quotes from a paste will crash fetch).
+    const clean = (s) => String(s).replace(/[^\x09\x20-\x7E]+/g, '');
     for (const [k, v] of Object.entries(cfg.headers || {})) {
-      if (typeof v === 'string') out[String(k)] = v;
+      if (typeof v === 'string') out[clean(k)] = clean(v);
     }
-    // bearer token wins over any user-supplied Authorization header
     if (cfg.bearerToken) {
-      out['Authorization'] = `Bearer ${cfg.bearerToken}`;
+      out['Authorization'] = `Bearer ${clean(cfg.bearerToken)}`;
     }
     return out;
   }

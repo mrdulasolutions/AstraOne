@@ -263,6 +263,20 @@ body {
   gap: 10px;
 }
 
+.mcp-banner {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(251, 191, 36, 0.16);
+  border: 1px solid rgba(251, 191, 36, 0.42);
+  color: #fde68a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mcp-banner strong {
+  color: #fffbeb;
+}
+
 .mcp-server-card {
   -webkit-app-region: no-drag;
   border-radius: 12px;
@@ -748,7 +762,8 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.10);
   -webkit-backdrop-filter: blur(22px) saturate(1.4);
   backdrop-filter: blur(22px) saturate(1.4);
-  animation: reply-fade-in 0.18s ease-out;
+  /* No CSS animation — macOS animates the window resize natively via
+     setBounds(..., true). A simultaneous CSS animation just fights it. */
 }
 
 .settings-panel.is-hidden {

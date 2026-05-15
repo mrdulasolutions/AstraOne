@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('glass', {
   getState: () => ipcRenderer.invoke('glass:getState'),
   setOpenRouterKey: (key) => ipcRenderer.invoke('glass:setOpenRouterKey', { key }),
   getOpenRouterKeyPresent: () => ipcRenderer.invoke('glass:getOpenRouterKeyPresent'),
+  clearProviderKey: (providerId) => ipcRenderer.invoke('glass:clearProviderKey', { providerId }),
   setOpenRouterModel: (model) => ipcRenderer.invoke('glass:setOpenRouterModel', { model }),
   listModels: (force) => ipcRenderer.invoke('glass:listModels', { force: Boolean(force) }),
   setPillOpacity: (opacity) => ipcRenderer.invoke('glass:setPillOpacity', { opacity }),

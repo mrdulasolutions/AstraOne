@@ -90,7 +90,10 @@
               <a href="https://openrouter.ai/settings/keys" id="linkOpenRouter">openrouter.ai/settings/keys</a> (free tier includes many <code>:free</code> models).
             </p>
             <label class="field">
-              <span>OpenRouter key</span>
+              <div class="field-row">
+                <span>OpenRouter key</span>
+                <button type="button" class="link-btn" id="btnClearKey" title="Remove the saved OpenRouter key">Clear</button>
+              </div>
               <input type="password" id="apiKey" autocomplete="off" placeholder="" />
             </label>
             <button type="button" class="pill-btn pill-btn-primary wide" id="btnSaveKey">Save API key</button>

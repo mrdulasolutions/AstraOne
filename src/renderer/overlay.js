@@ -537,7 +537,14 @@ async function loadMcpServers() {
     host.innerHTML = '<p class="model-hint">No MCP servers configured yet. Add one above to connect to Claude Code, a filesystem MCP, or any other stdio MCP server.</p>';
     return;
   }
-  host.innerHTML = servers.map(renderMcpServerCard).join('');
+  // Detect the common gotcha: connected servers with zero registered tools.
+  const connectedNoTools = servers.filter(
+    (s) => s.status === 'connected' && (s.discoveredTools || []).every((t) => !t.registered),
+  );
+  const banner = connectedNoTools.length
+    ? `<div class="mcp-banner">⚠ ${connectedNoTools.length} connected MCP server${connectedNoTools.length > 1 ? 's have' : ' has'} no tools registered yet. The agent can't call them until you click <strong>Register all</strong> (or pick individual tools) on each server below.</div>`
+    : '';
+  host.innerHTML = banner + servers.map(renderMcpServerCard).join('');
 }
 
 function renderMcpServerCard(s) {
@@ -581,8 +588,14 @@ function renderMcpServerCard(s) {
   const connectBtn = isConnected
     ? `<button type="button" class="pill-btn" data-mcp-action="disconnect" data-id="${escapeHtml(s.id)}">Disconnect</button>`
     : `<button type="button" class="pill-btn pill-btn-primary" data-mcp-action="connect" data-id="${escapeHtml(s.id)}" ${isConnecting ? 'disabled' : ''}>Connect</button>`;
+  const unregistered = isConnected
+    ? (s.discoveredTools || []).filter((t) => !t.registered).length
+    : 0;
   const refreshBtn = isConnected
     ? `<button type="button" class="pill-btn" data-mcp-action="refresh" data-id="${escapeHtml(s.id)}">↻ Refresh tools</button>`
+    : '';
+  const addAllBtn = isConnected && unregistered > 0
+    ? `<button type="button" class="pill-btn pill-btn-primary" data-mcp-action="add-all" data-id="${escapeHtml(s.id)}" title="Add every discovered tool from this server to the registry">＋ Register all (${unregistered})</button>`
     : '';
   const toolsBlock = isConnected ? renderMcpToolList(s) : '';
   const transportBadge = isHttp
@@ -600,6 +613,7 @@ function renderMcpServerCard(s) {
     ${errBlock}
     <div class="mcp-server-actions">
       ${connectBtn}
+      ${addAllBtn}
       ${refreshBtn}
       <button type="button" class="pill-btn pill-btn-danger" data-mcp-action="remove" data-id="${escapeHtml(s.id)}">Remove</button>
     </div>
@@ -718,7 +732,15 @@ async function refreshState() {
   const ttsToggle = $('ttsAutoSpeak');
   if (ttsToggle) ttsToggle.checked = ttsAutoSpeak;
   const k = await window.glass.getOpenRouterKeyPresent();
-  $('apiKey').placeholder = k.present ? 'Key on file — enter to replace' : 'sk-or-v1 key from openrouter.ai';
+  if ($('apiKey')) {
+    if (k.present) {
+      $('apiKey').placeholder = k.looksValid
+        ? `On file: ${k.prefix}… (${k.length} chars) — paste to replace`
+        : `⚠ On file: ${k.prefix}… (${k.length} chars) — looks invalid; paste a fresh one`;
+    } else {
+      $('apiKey').placeholder = 'sk-or-v1 key from openrouter.ai';
+    }
+  }
   const ek = await window.glass.getElevenLabsKeyPresent();
   const ekEl = $('elevenlabsKey');
   if (ekEl) ekEl.placeholder = ek.present ? 'Key on file — enter to replace' : 'sk_… from elevenlabs.io';
@@ -1019,6 +1041,22 @@ function wire() {
         if (!r?.ok) setReply(`Register failed: ${r?.error || ''}`);
         else setReply(r.alreadyRegistered ? `${toolName} already registered.` : `Registered ${toolName}.`);
         await loadTools();
+      } else if (action === 'add-all') {
+        const serverR = await window.glass.listMcpServers();
+        const srv = (serverR?.servers || []).find((s) => s.id === id);
+        const pending = (srv?.discoveredTools || []).filter((t) => !t.registered);
+        if (!pending.length) {
+          setReply('Nothing to register.');
+        } else {
+          setReply(`Registering ${pending.length} tool${pending.length > 1 ? 's' : ''}…`);
+          let added = 0;
+          for (const t of pending) {
+            const rr = await window.glass.registerMcpTool({ serverId: id, toolName: t.name });
+            if (rr?.ok && !rr.alreadyRegistered) added += 1;
+          }
+          setReply(`Registered ${added} tool${added === 1 ? '' : 's'} from ${id}.`);
+          await loadTools();
+        }
       } else if (action === 'unregister') {
         await window.glass.unregisterMcpTool({ serverId, toolName });
         setReply(`Unregistered ${toolName}.`);
@@ -1058,7 +1096,27 @@ function wire() {
     const key = $('apiKey').value.trim();
     const r = await window.glass.setOpenRouterKey(key);
     $('apiKey').value = '';
-    setReply(r.saved ? 'API key saved.' : 'No change (enter a key to save).');
+    if (!r.saved) {
+      setReply('No change (enter a key to save).');
+    } else {
+      let msg = `Saved ${r.prefix}… (${r.sanitizedLength} chars)`;
+      if (r.stripped > 0) msg += ` — stripped ${r.stripped} non-ASCII char${r.stripped > 1 ? 's' : ''}`;
+      setReply(msg);
+      if (!r.looksValid) {
+        showAnswer(
+          `Saved your key as: ${r.prefix}… (${r.sanitizedLength} chars)\n\n` +
+          `⚠ This doesn't look like a valid OpenRouter key (expected sk-or-v1-... followed by ~60 lowercase-hex chars). Common cause: macOS auto-substituted three dots into an ellipsis when you pasted a previewed/truncated key.\n\n` +
+          `Fix: open https://openrouter.ai/settings/keys, copy the FULL key (it'll be ~73 chars), and paste using ⌥⌘V (paste-without-formatting) to bypass smart-quote substitution.`
+        );
+      }
+    }
+    await refreshState();
+  });
+
+  $('btnClearKey')?.addEventListener('click', async () => {
+    if (!window.confirm('Clear the saved OpenRouter key?')) return;
+    await window.glass.clearProviderKey('openrouter');
+    setReply('OpenRouter key cleared.');
     await refreshState();
   });
 
@@ -1102,7 +1160,19 @@ function wire() {
       // The agent may have run tools; refresh the audit log for the settings panel.
       void loadAuditLog();
     } else {
-      setReply(r.error || 'Error');
+      const errText = String(r.error || 'Unknown error');
+      // Short summary in the chip, full text in the panel so users can read it all.
+      const short = errText.length > 60 ? `${errText.slice(0, 57)}…` : errText;
+      setReply(short);
+      let detail = errText;
+      if (/\b429\b/.test(errText)) {
+        detail += '\n\nTip: this is a rate limit on the upstream provider. Either wait ~60 seconds, switch to a paid model (anthropic/claude-3-5-sonnet, openai/gpt-4o-mini, etc.) in ⚙ Settings, or pick a different free model.';
+      } else if (/\b401\b/.test(errText)) {
+        detail += '\n\nTip: your API key was rejected. Re-paste it in ⚙ Settings.';
+      } else if (/\b404\b/.test(errText)) {
+        detail += '\n\nTip: the model id may be wrong. Click ↻ Refresh in the Model picker and pick a fresh one.';
+      }
+      showAnswer(detail);
     }
   });
 

@@ -230,6 +230,44 @@
 
         <div class="settings-section">
           <div class="settings-section-head">
+            <h2 class="settings-section-title">Agent Control Plane <span class="acp-status-chip" id="acpStatusChip" data-state="off">OFF</span></h2>
+            <p class="settings-section-sub">
+              Expose Astra's overlay to outside agents (Claude Code, Codex, Cursor, NAS-hosted bots) via MCP over Streamable HTTP on <code>127.0.0.1</code>. Off by default. Bearer-token authenticated; binds to loopback only.
+            </p>
+          </div>
+          <div class="acp-controls">
+            <label class="acp-toggle">
+              <input type="checkbox" id="acpEnabled" class="pill-toggle" />
+              <span>Enable agent control plane</span>
+            </label>
+            <div class="acp-endpoint" id="acpEndpoint" hidden></div>
+            <div class="acp-token-row" id="acpTokenRow" hidden>
+              <div class="acp-token-display" id="acpTokenDisplay">••••••••••••••••</div>
+              <button type="button" class="pill-btn" id="btnAcpReveal" title="Reveal the bearer token for 30 seconds">Reveal</button>
+              <button type="button" class="pill-btn" id="btnAcpCopy" title="Copy the bearer token">Copy</button>
+              <button type="button" class="pill-btn pill-btn-danger" id="btnAcpRotate" title="Generate a new token and invalidate the old">Rotate</button>
+            </div>
+            <details class="acp-snippets" id="acpSnippets" hidden>
+              <summary>Config snippets — paste into your agent</summary>
+              <div class="acp-snippet-block">
+                <div class="acp-snippet-label">Claude Code (<code>~/.claude.json</code> mcpServers)</div>
+                <pre class="acp-snippet" id="acpSnippetClaude"></pre>
+              </div>
+              <div class="acp-snippet-block">
+                <div class="acp-snippet-label">Codex (<code>~/.codex/config.toml</code>)</div>
+                <pre class="acp-snippet" id="acpSnippetCodex"></pre>
+              </div>
+              <div class="acp-snippet-block">
+                <div class="acp-snippet-label">Cursor / generic MCP</div>
+                <pre class="acp-snippet" id="acpSnippetGeneric"></pre>
+              </div>
+            </details>
+            <div class="acp-tool-list" id="acpToolList" hidden></div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-head">
             <h2 class="settings-section-title">ElevenLabs · Voice</h2>
             <p class="settings-section-sub">
               Microphone transcription (Scribe) and spoken answers (Flash v2.5). Get a key at

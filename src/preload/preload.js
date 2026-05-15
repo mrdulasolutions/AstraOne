@@ -71,6 +71,19 @@ contextBridge.exposeInMainWorld('glass', {
     ipcRenderer.on('mcp:removed', ch);
     return () => ipcRenderer.removeListener('mcp:removed', ch);
   },
+  // —— Astra MCP server (opt-in) ——
+  getAstraServerStatus: () => ipcRenderer.invoke('glass:getAstraServerStatus'),
+  setAstraServerEnabled: (enabled) =>
+    ipcRenderer.invoke('glass:setAstraServerEnabled', { enabled }),
+  rotateAstraServerToken: () => ipcRenderer.invoke('glass:rotateAstraServerToken'),
+  revealAstraServerToken: () => ipcRenderer.invoke('glass:revealAstraServerToken'),
+  setAstraServerToolEnabled: ({ name, enabled }) =>
+    ipcRenderer.invoke('glass:setAstraServerToolEnabled', { name, enabled }),
+  onOverlayMessage: (fn) => {
+    const ch = (_e, payload) => fn(payload);
+    ipcRenderer.on('glass:overlayMessage', ch);
+    return () => ipcRenderer.removeListener('glass:overlayMessage', ch);
+  },
   openExternal: (url) => ipcRenderer.invoke('glass:openExternal', { url }),
   resizeToContent: (size) => ipcRenderer.invoke('glass:resizeToContent', size),
   setLayout: (mode) => ipcRenderer.invoke('glass:setLayout', { mode }),

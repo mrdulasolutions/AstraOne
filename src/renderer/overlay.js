@@ -156,6 +156,7 @@ function openSettings() {
   void loadTools();
   void loadAuditLog();
   void loadMcpServers();
+  void loadAcpStatus();
   void (async () => {
     const k = await window.glass.getElevenLabsKeyPresent();
     if (k.present) loadVoices(false);
@@ -524,6 +525,69 @@ async function loadTools() {
       </select>
     </li>`;
   }).join('');
+}
+
+// ——— Agent Control Plane (Astra MCP server) ———
+
+function renderAcpSnippets(port, token) {
+  const url = `http://127.0.0.1:${port}/`;
+  const t = token || '<paste-token-here>';
+  $('acpSnippetClaude').textContent = JSON.stringify({
+    mcpServers: {
+      'astra-dock': {
+        type: 'http',
+        url,
+        headers: { Authorization: `Bearer ${t}` },
+      },
+    },
+  }, null, 2);
+  $('acpSnippetCodex').textContent =
+    `[mcp_servers.astra-dock]\n` +
+    `url = "${url}"\n` +
+    `bearer_token_env = "ASTRA_DOCK_TOKEN"\n` +
+    `# then: export ASTRA_DOCK_TOKEN="${t}"\n`;
+  $('acpSnippetGeneric').textContent =
+    `URL:        ${url}\n` +
+    `Header:     Authorization: Bearer ${t}\n` +
+    `Transport:  Streamable HTTP (MCP 2025-06-18)\n` +
+    `Binding:    127.0.0.1 only — never expose beyond loopback`;
+}
+
+function renderAcpToolList(tools) {
+  const host = $('acpToolList');
+  if (!host) return;
+  host.innerHTML = tools.map((t) => `
+    <div class="acp-tool-row">
+      <span class="acp-tool-name">${escapeHtml(t.name)}</span>
+      <span class="tool-effect" data-effect="${escapeHtml(t.effect)}">${escapeHtml(t.effect)}</span>
+      <label class="acp-toggle"><input type="checkbox" class="pill-toggle acp-tool-toggle" data-name="${escapeHtml(t.name)}" ${t.enabled ? 'checked' : ''} /></label>
+      <div class="acp-tool-desc">${escapeHtml(t.description)}</div>
+    </div>
+  `).join('');
+}
+
+async function loadAcpStatus() {
+  const r = await window.glass.getAstraServerStatus();
+  if (!r?.ok) return;
+  const enabledToggle = $('acpEnabled');
+  if (enabledToggle) enabledToggle.checked = Boolean(r.enabled);
+  const chip = $('acpStatusChip');
+  if (chip) {
+    if (r.running) { chip.dataset.state = 'on'; chip.textContent = 'RUNNING'; }
+    else if (r.enabled) { chip.dataset.state = 'error'; chip.textContent = 'ENABLED · NOT RUNNING'; }
+    else { chip.dataset.state = 'off'; chip.textContent = 'OFF'; }
+  }
+  const showWhenEnabled = ['acpEndpoint', 'acpTokenRow', 'acpSnippets', 'acpToolList'];
+  for (const id of showWhenEnabled) {
+    const el = $(id);
+    if (el) el.hidden = !r.enabled;
+  }
+  if (r.enabled) {
+    $('acpEndpoint').textContent = `http://127.0.0.1:${r.port}/  (loopback only)`;
+    renderAcpToolList(r.tools || []);
+    // Snippets render with placeholder token; full token only appears after Reveal.
+    renderAcpSnippets(r.port, null);
+  }
 }
 
 // ——— MCP server management ———
@@ -1080,6 +1144,75 @@ function wire() {
   // Auto-refresh server list on status events so connection states stay live.
   window.glass.onMcpStatus?.(() => { void loadMcpServers(); });
   window.glass.onMcpRemoved?.(() => { void loadMcpServers(); });
+
+  // ——— Agent Control Plane (PR-D) ———
+
+  $('acpEnabled')?.addEventListener('change', async (e) => {
+    const enabled = e.target.checked;
+    setReply(enabled ? 'Starting Astra MCP server…' : 'Stopping Astra MCP server…');
+    const r = await window.glass.setAstraServerEnabled(enabled);
+    if (!r?.ok) setReply(r?.error || 'Server toggle failed');
+    else setReply(enabled ? `Astra MCP server running on 127.0.0.1:${r.port}` : 'Astra MCP server stopped.');
+    await loadAcpStatus();
+  });
+
+  $('btnAcpReveal')?.addEventListener('click', async () => {
+    const r = await window.glass.revealAstraServerToken();
+    if (!r?.ok || !r.token) {
+      setReply('No token to reveal — enable the server first.');
+      return;
+    }
+    const display = $('acpTokenDisplay');
+    if (display) {
+      display.textContent = r.token;
+      display.classList.add('is-revealed');
+    }
+    // Re-render snippets with the actual token in place.
+    const status = await window.glass.getAstraServerStatus();
+    if (status?.ok) renderAcpSnippets(status.port, r.token);
+    setTimeout(async () => {
+      if (display) {
+        display.textContent = '••••••••••••••••';
+        display.classList.remove('is-revealed');
+      }
+      // Re-render snippets back to placeholder.
+      const s2 = await window.glass.getAstraServerStatus();
+      if (s2?.ok) renderAcpSnippets(s2.port, null);
+    }, 30_000);
+  });
+
+  $('btnAcpCopy')?.addEventListener('click', async () => {
+    const r = await window.glass.revealAstraServerToken();
+    if (!r?.ok || !r.token) {
+      setReply('No token to copy — enable the server first.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(r.token);
+      setReply('Token copied to clipboard (clear it from the clipboard when you\'re done).');
+    } catch (e) {
+      setReply('Copy failed: ' + (e?.message || e));
+    }
+  });
+
+  $('btnAcpRotate')?.addEventListener('click', async () => {
+    if (!window.confirm('Rotate the Astra MCP server bearer token? Any agents using the current token must be updated with the new one.')) return;
+    setReply('Rotating token…');
+    await window.glass.rotateAstraServerToken();
+    setReply('Rotated. Reveal + Copy to get the new value.');
+    await loadAcpStatus();
+  });
+
+  $('acpToolList')?.addEventListener('change', async (e) => {
+    const t = e.target;
+    if (!t?.classList?.contains('acp-tool-toggle')) return;
+    await window.glass.setAstraServerToolEnabled({ name: t.dataset.name, enabled: t.checked });
+  });
+
+  // External agents calling astra_show_overlay_message land here.
+  window.glass.onOverlayMessage?.((payload) => {
+    if (payload?.text) setReply(payload.text);
+  });
 
   const opacitySlider = $('pillOpacity');
   if (opacitySlider) {

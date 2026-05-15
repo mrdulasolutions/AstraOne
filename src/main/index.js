@@ -25,6 +25,13 @@ const anthropicProvider = require('./providers/anthropic.js');
 const { createRouter } = require('./agents/router.js');
 const { createMcpClient } = require('./tools/mcpClient.js');
 const { mergedSpawnEnv } = require('./util/shellEnv.js');
+const {
+  createAstraMcpServer,
+  generateToken: generateAstraServerToken,
+  tokenLooksValid: astraServerTokenLooksValid,
+  TOOL_DEFINITIONS: ASTRA_SERVER_TOOLS,
+  DEFAULT_PORT: ASTRA_SERVER_DEFAULT_PORT,
+} = require('./server/astraMcpServer.js');
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -42,6 +49,9 @@ let toolPermissions = null;
 let toolAuditLog = null;
 let agentRouter = null;
 let mcpClient = null;
+let astraMcpServer = null;
+/** Most recent reply panel text the agent emitted (read by astra_get_last_answer). */
+let lastAssistantText = '';
 /** Map<callId, resolve> — pending approval prompts awaiting renderer decision. */
 const pendingApprovals = new Map();
 
@@ -203,6 +213,10 @@ function loadPrefs() {
     j.toolPolicies = j.toolPolicies && typeof j.toolPolicies === 'object' ? j.toolPolicies : {};
     j.serverPolicies = j.serverPolicies && typeof j.serverPolicies === 'object' ? j.serverPolicies : {};
     j.mcpServers = Array.isArray(j.mcpServers) ? j.mcpServers : [];
+    j.astraServerEnabled = Boolean(j.astraServerEnabled);
+    j.astraServerPort = Number(j.astraServerPort) || ASTRA_SERVER_DEFAULT_PORT;
+    j.astraServerToolToggles = j.astraServerToolToggles && typeof j.astraServerToolToggles === 'object'
+      ? j.astraServerToolToggles : {};
     return j;
   } catch {
     return {
@@ -214,6 +228,9 @@ function loadPrefs() {
       toolPolicies: {},
       serverPolicies: {},
       mcpServers: [],
+      astraServerEnabled: false,
+      astraServerPort: ASTRA_SERVER_DEFAULT_PORT,
+      astraServerToolToggles: {},
     };
   }
 }
@@ -475,6 +492,130 @@ function emitToRenderer(channel, payload) {
   }
 }
 
+function getAstraServerToken() {
+  // Stored encrypted, same code path as provider API keys (prefs.apiKey_astra_server).
+  return getApiKey('astra_server');
+}
+
+function setAstraServerToken(token) {
+  setApiKey('astra_server', token);
+}
+
+function clearAstraServerToken() {
+  const prefs = loadPrefs();
+  delete prefs.apiKey_astra_server;
+  savePrefs(prefs);
+}
+
+/** Build handlers for every tool exposed by the Astra MCP server. */
+function buildAstraServerHandlers() {
+  return {
+    astra_capture_primary_screen: async () => {
+      const r = await captureBuiltins.capturePrimaryScreenThumbnail();
+      sessionImageBase64 = r.base64;
+      sessionImageMeta = r.meta;
+      broadcastState();
+      return {
+        content: [
+          { type: 'text', text: JSON.stringify({ meta: r.meta }) },
+          {
+            type: 'image',
+            data: r.base64,
+            mimeType: 'image/jpeg',
+          },
+        ],
+      };
+    },
+    astra_capture_active_window: async () => {
+      const r = await captureBuiltins.captureActiveWindowThumbnail();
+      sessionImageBase64 = r.base64;
+      sessionImageMeta = r.meta;
+      broadcastState();
+      return {
+        content: [
+          { type: 'text', text: JSON.stringify({ meta: r.meta }) },
+          { type: 'image', data: r.base64, mimeType: 'image/jpeg' },
+        ],
+      };
+    },
+    astra_ask_about_screen: async ({ prompt }) => {
+      const prefs = loadPrefs();
+      const apiKey = getApiKey('openrouter');
+      if (!apiKey) throw new Error('No OpenRouter API key configured in Astra Dock.');
+      const text = await askOpenRouter(
+        apiKey,
+        prefs.openrouterModel || DEFAULT_OPENROUTER_MODEL,
+        String(prompt || '').slice(0, 4000),
+        sessionImageBase64 || null,
+      );
+      return { content: [{ type: 'text', text: String(text || '') }] };
+    },
+    astra_get_last_answer: async () => {
+      return { content: [{ type: 'text', text: lastAssistantText || '' }] };
+    },
+    astra_show_overlay_message: async ({ text }) => {
+      const s = String(text || '').slice(0, 240);
+      emitToRenderer('glass:overlayMessage', { text: s });
+      return { content: [{ type: 'text', text: 'shown' }] };
+    },
+    astra_request_user_approval: async (args = {}) => {
+      const callId = `remote_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const descriptor = {
+        runId: null,
+        callId,
+        toolId: 'astra.request_user_approval',
+        source: 'astra-server',
+        serverId: 'astra-server',
+        effect: 'write',
+        description: 'External agent is requesting your approval.',
+        args,
+        previewText:
+          (args && args.previewText ? String(args.previewText) : null) ||
+          (args && args.prompt ? String(args.prompt) : 'No preview provided.'),
+      };
+      const decision = await awaitApprovalFromRenderer(descriptor);
+      const approved =
+        decision === 'approve' || decision === 'approve_server_session';
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ approved, decision }) }],
+      };
+    },
+    astra_panic_clear_buffer: async () => {
+      doPanic();
+      return { content: [{ type: 'text', text: 'cleared' }] };
+    },
+  };
+}
+
+async function ensureAstraServerStarted() {
+  const prefs = loadPrefs();
+  if (!prefs.astraServerEnabled) return { ok: false, error: 'server disabled' };
+  let token = getAstraServerToken();
+  if (!astraServerTokenLooksValid(token)) {
+    token = generateAstraServerToken();
+    setAstraServerToken(token);
+  }
+  if (!astraMcpServer) {
+    astraMcpServer = createAstraMcpServer({
+      getToken: () => getAstraServerToken(),
+      isToolEnabled: (name) => {
+        const t = loadPrefs().astraServerToolToggles || {};
+        return t[name] !== false; // default ON
+      },
+      handlers: buildAstraServerHandlers(),
+      log: (s) => console.warn(s),
+    });
+  }
+  if (astraMcpServer.getRunning()) return { ok: true, port: astraMcpServer.getPort() };
+  const r = await astraMcpServer.start({ port: prefs.astraServerPort || ASTRA_SERVER_DEFAULT_PORT });
+  return r;
+}
+
+async function stopAstraServer() {
+  if (!astraMcpServer) return { ok: true };
+  return astraMcpServer.stop();
+}
+
 async function awaitApprovalFromRenderer(descriptor) {
   return new Promise((resolve) => {
     pendingApprovals.set(descriptor.callId, resolve);
@@ -519,7 +660,14 @@ function initAgentStack() {
     },
     getProviderApiKey: (providerId) => getApiKey(providerId),
     awaitApproval: awaitApprovalFromRenderer,
-    emit: (event, payload) => emitToRenderer(event, payload),
+    emit: (event, payload) => {
+      // Cache the final assistant text so external agents can read it via
+      // astra_get_last_answer over the MCP server (PR-D).
+      if (event === 'tool:event' && payload?.phase === 'final' && typeof payload.text === 'string') {
+        lastAssistantText = payload.text;
+      }
+      emitToRenderer(event, payload);
+    },
     getSessionImage: () => sessionImageBase64,
     getSessionMeta: () => sessionImageMeta,
   });
@@ -1016,6 +1164,75 @@ function setupIpc() {
     if (!mcpClient) return { ok: true, stderr: '' };
     return { ok: true, stderr: mcpClient.getStderr(String(payload.id || '')) };
   });
+
+  // ——— Astra MCP server (opt-in) ———
+
+  ipcMain.handle('glass:getAstraServerStatus', () => {
+    const prefs = loadPrefs();
+    const running = Boolean(astraMcpServer?.getRunning());
+    const hasToken = Boolean(getAstraServerToken());
+    const port = astraMcpServer?.getPort() || prefs.astraServerPort || ASTRA_SERVER_DEFAULT_PORT;
+    return {
+      ok: true,
+      enabled: Boolean(prefs.astraServerEnabled),
+      running,
+      port,
+      hasToken,
+      tools: ASTRA_SERVER_TOOLS.map((t) => ({
+        name: t.name,
+        description: t.description,
+        effect: t.effect,
+        enabled: prefs.astraServerToolToggles?.[t.name] !== false,
+      })),
+    };
+  });
+
+  ipcMain.handle('glass:setAstraServerEnabled', async (_e, payload = {}) => {
+    const prefs = loadPrefs();
+    prefs.astraServerEnabled = Boolean(payload.enabled);
+    savePrefs(prefs);
+    if (prefs.astraServerEnabled) {
+      try {
+        const r = await ensureAstraServerStarted();
+        return { ok: true, ...r };
+      } catch (err) {
+        return { ok: false, error: err?.message || String(err) };
+      }
+    }
+    try {
+      await stopAstraServer();
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+    return { ok: true };
+  });
+
+  ipcMain.handle('glass:rotateAstraServerToken', async () => {
+    const fresh = generateAstraServerToken();
+    setAstraServerToken(fresh);
+    // Restart so existing sessions are forced to re-auth with the new token.
+    if (astraMcpServer?.getRunning()) {
+      await stopAstraServer();
+      await ensureAstraServerStarted();
+    }
+    return { ok: true };
+  });
+
+  ipcMain.handle('glass:revealAstraServerToken', () => {
+    return { ok: true, token: getAstraServerToken() || null };
+  });
+
+  ipcMain.handle('glass:setAstraServerToolEnabled', (_e, payload = {}) => {
+    const prefs = loadPrefs();
+    const name = String(payload.name || '');
+    if (!ASTRA_SERVER_TOOLS.some((t) => t.name === name)) {
+      return { ok: false, error: 'unknown tool' };
+    }
+    if (!prefs.astraServerToolToggles) prefs.astraServerToolToggles = {};
+    prefs.astraServerToolToggles[name] = Boolean(payload.enabled);
+    savePrefs(prefs);
+    return { ok: true };
+  });
 }
 
 app.whenReady().then(() => {
@@ -1023,6 +1240,13 @@ app.whenReady().then(() => {
   createWindow();
   setupIpc();
   registerShortcuts();
+  // Auto-start the Astra MCP server if the user previously enabled it.
+  if (loadPrefs().astraServerEnabled) {
+    ensureAstraServerStarted().catch((e) =>
+      // eslint-disable-next-line no-console
+      console.warn('[astra-mcp] auto-start failed:', e?.message || e),
+    );
+  }
 
   screen.on('display-metrics-changed', () => {
     if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {

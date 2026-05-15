@@ -277,6 +277,137 @@ body {
   color: #fffbeb;
 }
 
+/* ——— Agent Control Plane (PR-D) ——— */
+
+.acp-status-chip {
+  margin-left: 8px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.6);
+  vertical-align: middle;
+}
+
+.acp-status-chip[data-state='on']      { background: rgba(52, 211, 153, 0.28); color: #34d399; }
+.acp-status-chip[data-state='off']     { background: rgba(255, 255, 255, 0.10); color: rgba(255, 255, 255, 0.6); }
+.acp-status-chip[data-state='error']   { background: rgba(248, 113, 113, 0.28); color: #f87171; }
+
+.acp-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.acp-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.acp-endpoint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.acp-token-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.acp-token-display {
+  flex: 1;
+  min-width: 200px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.92);
+  word-break: break-all;
+}
+
+.acp-token-display.is-revealed {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(165, 180, 252, 0.4);
+}
+
+.acp-snippets summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: rgba(165, 180, 252, 0.9);
+  padding: 6px 0;
+}
+
+.acp-snippet-block { margin: 8px 0; }
+
+.acp-snippet-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.62);
+  margin-bottom: 4px;
+}
+
+.acp-snippet {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.86);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  max-height: 160px;
+}
+
+.acp-tool-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+}
+
+.acp-tool-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.acp-tool-row + .acp-tool-row { border-top: 1px solid rgba(255, 255, 255, 0.04); }
+
+.acp-tool-row .acp-tool-name {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.acp-tool-row .acp-tool-desc {
+  grid-column: 1 / span 3;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .mcp-server-card {
   -webkit-app-region: no-drag;
   border-radius: 12px;

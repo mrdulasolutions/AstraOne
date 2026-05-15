@@ -22,6 +22,7 @@ const { createAuditLog } = require('./tools/auditLog.js');
 const captureBuiltins = require('./tools/builtins/capture.js');
 const openrouterProvider = require('./providers/openrouter.js');
 const anthropicProvider = require('./providers/anthropic.js');
+const openaiProvider = require('./providers/openai.js');
 const { createRouter } = require('./agents/router.js');
 const { createMcpClient } = require('./tools/mcpClient.js');
 const { mergedSpawnEnv } = require('./util/shellEnv.js');
@@ -209,7 +210,9 @@ function loadPrefs() {
     j.elevenlabsVoiceId = typeof j.elevenlabsVoiceId === 'string' && j.elevenlabsVoiceId
       ? j.elevenlabsVoiceId : DEFAULT_ELEVENLABS_VOICE_ID;
     j.ttsAutoSpeak = Boolean(j.ttsAutoSpeak);
-    j.provider = ['openrouter', 'anthropic'].includes(j.provider) ? j.provider : 'openrouter';
+    j.provider = ['openrouter', 'anthropic', 'openai'].includes(j.provider) ? j.provider : 'openrouter';
+    j.anthropicModel = typeof j.anthropicModel === 'string' ? j.anthropicModel : '';
+    j.openaiModel = typeof j.openaiModel === 'string' ? j.openaiModel : '';
     j.toolPolicies = j.toolPolicies && typeof j.toolPolicies === 'object' ? j.toolPolicies : {};
     j.serverPolicies = j.serverPolicies && typeof j.serverPolicies === 'object' ? j.serverPolicies : {};
     j.mcpServers = Array.isArray(j.mcpServers) ? j.mcpServers : [];
@@ -657,6 +660,7 @@ function initAgentStack() {
     providers: {
       openrouter: { chat: openrouterProvider.chat },
       anthropic: { chat: anthropicProvider.chat },
+      openai: { chat: openaiProvider.chat },
     },
     getProviderApiKey: (providerId) => getApiKey(providerId),
     awaitApproval: awaitApprovalFromRenderer,
@@ -759,6 +763,8 @@ function setupIpc() {
       elevenlabsVoiceId: prefs.elevenlabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID,
       ttsAutoSpeak: Boolean(prefs.ttsAutoSpeak),
       provider: prefs.provider || 'openrouter',
+      anthropicModel: prefs.anthropicModel || '',
+      openaiModel: prefs.openaiModel || '',
     };
   });
 
@@ -811,7 +817,7 @@ function setupIpc() {
 
   ipcMain.handle('glass:clearProviderKey', (_e, payload = {}) => {
     const providerId = String(payload.providerId || '');
-    if (!['openrouter', 'anthropic', 'elevenlabs'].includes(providerId)) {
+    if (!['openrouter', 'anthropic', 'openai', 'elevenlabs'].includes(providerId)) {
       return { ok: false, error: 'invalid provider' };
     }
     const prefs = loadPrefs();
@@ -946,13 +952,15 @@ function setupIpc() {
     if (!agentRouter) return { ok: false, error: 'agent not initialized' };
     const prefs = loadPrefs();
     const providerId = String(payload.providerId || prefs.provider || 'openrouter');
-    // For openrouter, fall back to the saved openrouter model. Anthropic uses a separate field
-    // (anthropicModel) once we add a picker; for now, accept model on the payload.
-    const model = String(
-      payload.model ||
-      (providerId === 'openrouter' ? prefs.openrouterModel : '') ||
-      DEFAULT_OPENROUTER_MODEL,
-    );
+    const savedModelByProvider = {
+      openrouter: prefs.openrouterModel || DEFAULT_OPENROUTER_MODEL,
+      anthropic: prefs.anthropicModel || '',
+      openai: prefs.openaiModel || '',
+    };
+    const model = String(payload.model || savedModelByProvider[providerId] || '');
+    if (!model) {
+      return { ok: false, error: `No model id set for provider "${providerId}". Open ⚙ Settings and pick one.` };
+    }
     try {
       const out = await agentRouter.run({
         providerId,
@@ -1022,10 +1030,24 @@ function setupIpc() {
     return { ok: true };
   });
 
+  ipcMain.handle('glass:setProviderModel', (_e, payload = {}) => {
+    const providerId = String(payload.providerId || '');
+    if (!['openrouter', 'anthropic', 'openai'].includes(providerId)) {
+      return { ok: false, error: 'invalid provider' };
+    }
+    const model = String(payload.model || '').trim();
+    const prefs = loadPrefs();
+    if (providerId === 'openrouter') prefs.openrouterModel = model || DEFAULT_OPENROUTER_MODEL;
+    else if (providerId === 'anthropic') prefs.anthropicModel = model;
+    else if (providerId === 'openai') prefs.openaiModel = model;
+    savePrefs(prefs);
+    return { ok: true };
+  });
+
   ipcMain.handle('glass:setProvider', (_e, payload = {}) => {
     const prefs = loadPrefs();
     const providerId = String(payload.providerId || '');
-    if (!['openrouter', 'anthropic'].includes(providerId)) {
+    if (!['openrouter', 'anthropic', 'openai'].includes(providerId)) {
       return { ok: false, error: 'invalid provider' };
     }
     prefs.provider = providerId;
@@ -1035,7 +1057,7 @@ function setupIpc() {
 
   ipcMain.handle('glass:setProviderApiKey', (_e, payload = {}) => {
     const providerId = String(payload.providerId || '');
-    if (!['openrouter', 'anthropic', 'elevenlabs'].includes(providerId)) {
+    if (!['openrouter', 'anthropic', 'openai', 'elevenlabs'].includes(providerId)) {
       return { ok: false, error: 'invalid provider' };
     }
     const k = String(payload.key || '').trim();

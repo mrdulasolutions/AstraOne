@@ -148,18 +148,28 @@
                 <select id="providerSelect" class="select-input">
                   <option value="openrouter">OpenRouter (default)</option>
                   <option value="anthropic">Anthropic (native)</option>
+                  <option value="openai">OpenAI (native)</option>
                 </select>
-                <p class="model-hint">OpenRouter uses your saved model id. Anthropic uses its own model id (paste it below).</p>
+                <p class="model-hint">OpenRouter uses your saved model id from the picker above. Anthropic and OpenAI take their own model id below.</p>
               </label>
               <label class="field" id="anthropicModelField" style="display:none">
                 <div class="field-row"><span>Anthropic model</span></div>
                 <input type="text" id="anthropicModel" spellcheck="false" autocomplete="off" placeholder="claude-sonnet-4-5" />
               </label>
-              <label class="field">
+              <label class="field" id="anthropicKeyField" style="display:none">
                 <div class="field-row"><span>Anthropic key</span></div>
                 <input type="password" id="anthropicKey" autocomplete="off" placeholder="sk-ant-…" />
               </label>
-              <button type="button" class="pill-btn pill-btn-primary wide" id="btnSaveAnthropicKey">Save Anthropic key</button>
+              <button type="button" class="pill-btn pill-btn-primary wide" id="btnSaveAnthropicKey" style="display:none">Save Anthropic key</button>
+              <label class="field" id="openaiModelField" style="display:none">
+                <div class="field-row"><span>OpenAI model</span></div>
+                <input type="text" id="openaiModel" spellcheck="false" autocomplete="off" placeholder="gpt-4o-mini" />
+              </label>
+              <label class="field" id="openaiKeyField" style="display:none">
+                <div class="field-row"><span>OpenAI key</span></div>
+                <input type="password" id="openaiKey" autocomplete="off" placeholder="sk-… or sk-proj-…" />
+              </label>
+              <button type="button" class="pill-btn pill-btn-primary wide" id="btnSaveOpenaiKey" style="display:none">Save OpenAI key</button>
             </div>
             <div class="settings-col">
               <label class="field">

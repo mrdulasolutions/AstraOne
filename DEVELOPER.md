@@ -115,6 +115,7 @@ Astra Dock is a three-process Electron app with the entire agent stack living in
 │  providers/                                                  │
 │    openrouter.js         OpenAI-shape + retry on 429/503     │
 │    anthropic.js          @anthropic-ai/sdk native            │
+│    openai.js             api.openai.com direct (PR-E)        │
 │                                                              │
 │  util/                                                       │
 │    shellEnv.js           login-shell PATH for child_process  │
@@ -160,7 +161,7 @@ All preload-exposed IPC, with one-line descriptions. See `src/preload/preload.js
 | **`cancelAgentRun()`** | Abort the in-flight agent run |
 | **`getAuditLog({ limit })`** | Tail the audit log (last N entries) |
 | **`listTools()` / `setToolPolicy({ toolId, policy })`** | Inspect the registry; override per-tool policy |
-| **`setProvider({ providerId })` / `setProviderApiKey({ providerId, key })` / `getProviderKeyPresent({ providerId })` / `clearProviderKey({ providerId })`** | Provider abstraction surface (OpenRouter / Anthropic / ElevenLabs) |
+| **`setProvider({ providerId })` / `setProviderApiKey({ providerId, key })` / `getProviderKeyPresent({ providerId })` / `clearProviderKey({ providerId })` / `setProviderModel({ providerId, model })`** | Provider abstraction surface (OpenRouter / Anthropic / OpenAI / ElevenLabs). `setProviderModel` persists the per-provider model id; OpenRouter uses its existing `openrouterModel` field, Anthropic and OpenAI use their own `anthropicModel` / `openaiModel` prefs. |
 | **`listMcpServers()` / `addMcpServer(config)` / `removeMcpServer(id)` / `connectMcpServer(id)` / `disconnectMcpServer(id)` / `refreshMcpTools(id)` / `registerMcpTool({ serverId, toolName })` / `unregisterMcpTool({ serverId, toolName })` / `updateMcpServerAuth({ id, headers, bearerToken })` / `getMcpStderr(id)`** | MCP server pool management |
 | `openExternal(url)` | Open an `https://` link in the user's browser |
 | `resizeToContent({ width, height })` | Renderer asks main to size the window to fit |
@@ -185,7 +186,7 @@ All preload-exposed IPC, with one-line descriptions. See `src/preload/preload.js
   - `provider` — `'openrouter'` or `'anthropic'` (active brain)
   - `toolPolicies` / `serverPolicies` — `{ id: 'auto' | 'prompt' | 'always-prompt' }`
   - `mcpServers` — array of `{ id, type, … }` configs. `bearerToken_enc` is encrypted via `safeStorage`; the plaintext `bearerToken` only exists in memory.
-- **API keys** stored inside `prefs.json` under `apiKey_<provider>` (`openrouter`, `anthropic`, `elevenlabs`), encrypted via `safeStorage.encryptString` when `safeStorage.isEncryptionAvailable()` (true on macOS with the user logged in), otherwise base64-encoded as a fallback. **`sanitizeApiKey()`** strips non-printable / non-ASCII bytes on both read and write — fetch's `Authorization` header can't carry them, and macOS smart-quote substitution loves to sneak Unicode into pasted keys.
+- **API keys** stored inside `prefs.json` under `apiKey_<provider>` (`openrouter`, `anthropic`, `openai`, `elevenlabs`, and `astra_server` for the Astra-as-MCP-server bearer), encrypted via `safeStorage.encryptString` when `safeStorage.isEncryptionAvailable()` (true on macOS with the user logged in), otherwise base64-encoded as a fallback. **`sanitizeApiKey()`** strips non-printable / non-ASCII bytes on both read and write — fetch's `Authorization` header can't carry them, and macOS smart-quote substitution loves to sneak Unicode into pasted keys.
 
 ### Capture pipeline
 

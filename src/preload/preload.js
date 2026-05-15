@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld('glass', {
   setToolPolicy: ({ toolId, policy }) =>
     ipcRenderer.invoke('glass:setToolPolicy', { toolId, policy }),
   setProvider: (providerId) => ipcRenderer.invoke('glass:setProvider', { providerId }),
+  setProviderModel: ({ providerId, model }) =>
+    ipcRenderer.invoke('glass:setProviderModel', { providerId, model }),
   setProviderApiKey: ({ providerId, key }) =>
     ipcRenderer.invoke('glass:setProviderApiKey', { providerId, key }),
   getProviderKeyPresent: (providerId) =>

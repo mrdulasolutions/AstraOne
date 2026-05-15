@@ -211,6 +211,7 @@ let currentTtsAudio = null;
 let pendingApproval = null;  // descriptor of the call currently shown in the approval card
 let activeProvider = 'openrouter';
 let anthropicModel = '';
+let openaiModel = '';
 
 function formatPricePerMillion(perToken) {
   if (!perToken || perToken === 0) return 'free';
@@ -779,16 +780,31 @@ async function loadModels(force) {
   renderModelMeta(currentModelId);
 }
 
+function syncProviderFieldVisibility() {
+  const show = (id, on) => { const el = $(id); if (el) el.style.display = on ? '' : 'none'; };
+  show('anthropicModelField', activeProvider === 'anthropic');
+  show('anthropicKeyField', activeProvider === 'anthropic');
+  show('btnSaveAnthropicKey', activeProvider === 'anthropic');
+  show('openaiModelField', activeProvider === 'openai');
+  show('openaiKeyField', activeProvider === 'openai');
+  show('btnSaveOpenaiKey', activeProvider === 'openai');
+}
+
 async function refreshState() {
   const s = await window.glass.getState();
   currentModelId = s.openrouterModel || '';
   currentVoiceId = s.elevenlabsVoiceId || '';
   ttsAutoSpeak = Boolean(s.ttsAutoSpeak);
   activeProvider = s.provider || 'openrouter';
+  anthropicModel = s.anthropicModel || '';
+  openaiModel = s.openaiModel || '';
   const providerSel = $('providerSelect');
   if (providerSel) providerSel.value = activeProvider;
-  const anthField = $('anthropicModelField');
-  if (anthField) anthField.style.display = activeProvider === 'anthropic' ? '' : 'none';
+  const anthInput = $('anthropicModel');
+  if (anthInput) anthInput.value = anthropicModel;
+  const openaiInput = $('openaiModel');
+  if (openaiInput) openaiInput.value = openaiModel;
+  syncProviderFieldVisibility();
   rebuildModelList();
   renderModelMeta(currentModelId);
   rebuildVoiceList();
@@ -1008,13 +1024,18 @@ function wire() {
     providerSel.addEventListener('change', async () => {
       activeProvider = providerSel.value;
       await window.glass.setProvider(activeProvider);
-      const f = $('anthropicModelField');
-      if (f) f.style.display = activeProvider === 'anthropic' ? '' : 'none';
+      syncProviderFieldVisibility();
     });
   }
 
-  $('anthropicModel')?.addEventListener('change', () => {
+  $('anthropicModel')?.addEventListener('change', async () => {
     anthropicModel = ($('anthropicModel')?.value || '').trim();
+    await window.glass.setProviderModel({ providerId: 'anthropic', model: anthropicModel });
+  });
+
+  $('openaiModel')?.addEventListener('change', async () => {
+    openaiModel = ($('openaiModel')?.value || '').trim();
+    await window.glass.setProviderModel({ providerId: 'openai', model: openaiModel });
   });
 
   $('btnSaveAnthropicKey')?.addEventListener('click', async () => {
@@ -1022,6 +1043,13 @@ function wire() {
     const r = await window.glass.setProviderApiKey({ providerId: 'anthropic', key: k });
     if ($('anthropicKey')) $('anthropicKey').value = '';
     setReply(r.saved ? 'Anthropic key saved.' : 'No change (enter a key to save).');
+  });
+
+  $('btnSaveOpenaiKey')?.addEventListener('click', async () => {
+    const k = ($('openaiKey')?.value || '').trim();
+    const r = await window.glass.setProviderApiKey({ providerId: 'openai', key: k });
+    if ($('openaiKey')) $('openaiKey').value = '';
+    setReply(r.saved ? 'OpenAI key saved.' : 'No change (enter a key to save).');
   });
 
   $('toolList')?.addEventListener('change', async (e) => {
@@ -1285,6 +1313,14 @@ function wire() {
       }
       payload.model = m;
       anthropicModel = m;
+    } else if (activeProvider === 'openai') {
+      const m = ($('openaiModel')?.value || openaiModel || '').trim();
+      if (!m) {
+        setReply('Set an OpenAI model id in settings first.');
+        return;
+      }
+      payload.model = m;
+      openaiModel = m;
     }
     const r = await window.glass.runAgent(payload);
     if (r.ok) {

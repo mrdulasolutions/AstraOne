@@ -13,7 +13,7 @@ A product of **Astra One** by [MR Dula Solutions](#about), a DBA of MR Dula Ente
 - **Float anywhere.** A wide pill HUD pinned to the top of your screen. Drag it, hide it, summon it with ⌘\\. Stays above other apps and fullscreen content.
 - **Agent mode.** Ask doesn't just chat — it runs a bounded tool-call loop against your chosen model. The agent can call built-in tools (screen / window capture) and any MCP tools you've registered, asking for your approval on writes via an in-pill approval card.
 - **MCP host.** Connect to remote MCP servers (GitHub, Notion, internal company APIs) with a URL + bearer token, or to local stdio MCP servers (Claude Code, filesystem, sqlite). Pick which discovered tools the agent is allowed to use.
-- **Two brain providers.** OpenRouter (any of their hundreds of models, with the live catalog filterable by Free / Vision / Audio) and Anthropic native (Claude Sonnet / Haiku via their official SDK). Tool-calling works on both.
+- **Three brain providers.** OpenRouter (any of their hundreds of models, with the live catalog filterable by Free / Vision / Audio), Anthropic native (Claude Sonnet / Haiku via the official SDK), and OpenAI native (gpt-4o-mini / gpt-4o / gpt-5 direct). Tool-calling works on all three.
 - **Talk to your screen.** Hit the **Mic** button to dictate a prompt — ElevenLabs Scribe transcribes it straight into the ask field. Toggle **Auto-speak responses** in settings and answers come back as natural ElevenLabs voice.
 - **Approval & audit.** Every tool call has an `effect` (read / write / exec) and a `policy` (auto / prompt / always-prompt). Writes default to prompt; an append-only audit log records every call (id, hash of args, duration, approver, status).
 - **Tune the look.** Glass-style translucency with a live opacity slider in settings, applied to the pill and the settings panel both.
@@ -68,9 +68,10 @@ Everything lives in the settings panel (⚙ button on the pill):
 
 | Setting | What it does |
 |---|---|
-| **Provider** | `openrouter` (default) or `anthropic` native. Each has its own key and (for Anthropic) its own model id field. |
+| **Provider** | `openrouter` (default), `anthropic` native, or `openai` native. Each has its own key and (for Anthropic / OpenAI) its own model id field. |
 | **OpenRouter key** | Authenticates chat completions, the model catalog, and the agent's tool-call loop. Stored encrypted via `safeStorage` when available. Placeholder shows the on-file prefix + length + a warning if the format doesn't match. |
-| **Anthropic key** | Same pattern as OpenRouter, used when Provider is set to Anthropic. |
+| **Anthropic key + model** | Used when Provider is set to Anthropic. Model id is free-form (`claude-sonnet-4-5`, `claude-3-5-haiku`, …). |
+| **OpenAI key + model** | Used when Provider is set to OpenAI. Model id is free-form (`gpt-4o-mini`, `gpt-4o`, `gpt-5`, …). |
 | **Model** | The chat/vision model used for **Ask**. Browse the live OpenRouter catalog with filter chips (All / Free / Vision / Audio) and per-model metadata (FREE badge, vision/audio support, context size, price-per-million). |
 | **Agent · Tools & Permissions** | Lists every tool registered in the agent (built-ins + MCP). Per-tool policy dropdown: `default` (effect-based), `auto`, `prompt`, `always-prompt`. **Recent activity** below shows the last 20 audit-log entries. |
 | **MCP Servers** | Two add-flows: **Remote** (URL + bearer token + optional headers) and **Local stdio** (command + args + env). Per-server cards expose Connect / Disconnect / **＋ Register all** / Refresh / Remove, plus the discovered-tool list with effect badges and schema-warning chips. |
@@ -128,12 +129,12 @@ Bounds: max **8 model turns**, max **90 seconds** wall clock, fully cancellable 
 | Always-on-top above menu bar and fullscreen apps | ✅ shipping |
 | 🎙 Voice input via ElevenLabs Scribe | ✅ shipping |
 | 🔊 Spoken responses via ElevenLabs Flash v2.5 | ✅ shipping |
-| **Tool-call agent loop** with provider abstraction (OpenRouter + Anthropic) | ✅ shipping |
+| **Tool-call agent loop** with provider abstraction (OpenRouter + Anthropic + OpenAI) | ✅ shipping |
 | **Approval card** for write/exec tools with risk-colored border + Cmd+Y/N hotkeys | ✅ shipping |
 | **Append-only audit log** of every tool call (id, args-hash, duration, approver) | ✅ shipping |
 | **MCP client** — stdio + Streamable HTTP transports, schema linter, per-tool policies | ✅ shipping |
-| **Astra as an MCP server** — let Claude Code / Codex / Cursor call into the dock | 🚧 PR-D in progress |
-| Connector cookbook (recommended community MCP configs) | 🔜 PR-E |
+| **Astra as an MCP server** — Claude Code / Codex / Cursor call into the dock for screen capture + approvals | ✅ shipping |
+| **Connector cookbook** — vetted configs for GitHub / Notion / Sentry / Stripe / Linear / Slack / Filesystem / SQLite / Postgres / Playwright / Claude Code / Gmail / Calendar | ✅ shipping |
 | Signed `.dmg` distribution | 🔜 planned |
 | Windows / Linux builds | 🔜 evaluating |
 

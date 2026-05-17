@@ -26,6 +26,7 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:unsigned": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config.mac.identity=null",
+    "dist:signed": "./scripts/build-signed.sh",
     "dist:arm64": "electron-builder --mac --arm64",
     "dist:x64": "electron-builder --mac --x64",
     "dist:universal": "electron-builder --mac --universal"

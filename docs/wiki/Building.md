@@ -8,11 +8,13 @@
 |---|---|
 | Local test build (no signing) | `npm run dist:unsigned` |
 | Just the `.app` bundle | `npm run pack` |
-| Signed (cert required) | `npm run dist` |
-| Signed + notarized (production) | `APPLE_ID=… APPLE_APP_SPECIFIC_PASSWORD=… APPLE_TEAM_ID=… npm run dist` |
+| **Signed + notarized (production, recommended)** | `APPLE_ID=… APPLE_APP_SPECIFIC_PASSWORD=… APPLE_TEAM_ID=… ASTRA_SIGN_IDENTITY=<sha1> npm run dist:signed` |
+| Signed via electron-builder directly | `npm run dist` *(falls back to identity name → can hit name ambiguity if you have duplicate certs across keychains)* |
 | Apple Silicon only | `npm run dist:arm64` |
 | Intel only | `npm run dist:x64` |
 | Universal (1.9× the size) | `npm run dist:universal` |
+
+Find your cert SHA1 with `security find-identity -v -p codesigning` — it's the long hex string before the cert name.
 
 After `npm run dist:unsigned`:
 

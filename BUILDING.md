@@ -13,11 +13,13 @@ This guide covers producing distributable `.dmg` and `.zip` artifacts of Astra D
 | You want… | Command | Output |
 |---|---|---|
 | Test the bundling locally (no signing, no notarization) | `npm run dist:unsigned` | `dist/Astra Dock-<v>-arm64.dmg`, `dist/Astra Dock-<v>.dmg` (x64), zips for both archs |
-| Build a signed `.dmg` for *your* machine | `npm run dist` *(with a Developer ID cert in your Keychain)* | Signed but not notarized — Gatekeeper will still warn on first launch on other machines |
-| Build a signed + notarized `.dmg` for general distribution | `npm run dist` *(with `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` env vars)* | Production-grade artifact |
+| Build a **signed + notarized** `.dmg` for general distribution **(recommended)** | `APPLE_ID=… APPLE_APP_SPECIFIC_PASSWORD=… APPLE_TEAM_ID=… ASTRA_SIGN_IDENTITY=<sha1> ./scripts/build-signed.sh` | Production-grade artifacts. Works even if you have multiple certs with the same Common Name across keychains. |
+| Build a signed `.dmg` via electron-builder directly (no notarize hook) | `npm run dist` *(with a Developer ID cert in your Keychain)* | Signed but not notarized — Gatekeeper warns on first launch elsewhere. Fails fast if more than one cert in your keychains shares the Common Name (see [Sign ambiguity](#sign-ambiguity-when-the-same-cert-exists-in-two-keychains) below). |
 | Just the app bundle (no DMG/zip wrapper) | `npm run pack` | `dist/mac-arm64/Astra Dock.app` |
 
 Architecture-specific variants: `npm run dist:arm64`, `dist:x64`, `dist:universal`.
+
+`./scripts/build-signed.sh` is the path we actually ship from — it sidesteps a macOS codesign bug (see below) and handles the full sign → notarize → staple → DMG-sign → DMG-notarize → DMG-staple flow in one command. Look up your cert's SHA1 with `security find-identity -v -p codesigning` (the long hex string before the cert name).
 
 ## Outputs
 
@@ -116,6 +118,28 @@ The `mac.target` config already builds the ZIPs and `latest-mac.yml` manifest th
 3. Host the artifacts somewhere `electron-updater` can reach (GitHub Releases works out of the box — set `publish: github` in the build config and electron-builder will upload on `--publish always`).
 
 Out of scope for v0.1.0.
+
+## Sign ambiguity (when the same cert exists in two keychains)
+
+If `npm run dist` fails with:
+
+```
+codesign --sign "Developer ID Application: <Name> (<TEAM>)" ... \
+  ambiguous (matches "<Name>" in /Library/Keychains/System.keychain and "<Name>" in /Users/<you>/Library/Keychains/login.keychain-db)
+```
+
+…you have two certs with the **same Common Name** in different keychains. Most commonly the orphan in `System.keychain` lacks a private key but still shows up in codesign's search and triggers the ambiguity check. macOS codesign won't disambiguate by hash when you pass a name, and electron-builder's signing pipeline normalizes whatever identity you give it (including `--config.mac.identity=<sha1>`) back to a name before calling codesign.
+
+Two fixes:
+
+1. **Recommended — use `./scripts/build-signed.sh`.** It calls `@electron/osx-sign` (and later `codesign` for the DMG) with the raw SHA1, never a name, so the ambiguity check is bypassed entirely.
+2. **Or remove the orphan from System.keychain:**
+   ```bash
+   # Find which SHA1 is the orphan (the one with no private key — find-identity won't list it under that keychain alone):
+   security find-certificate -a -c "Developer ID Application" -Z /Library/Keychains/System.keychain | grep SHA-1
+   sudo security delete-certificate -Z <SHA1_OF_ORPHAN> /Library/Keychains/System.keychain
+   ```
+   After this, `security find-identity -v -p codesigning` should show exactly one valid identity, and `npm run dist` works.
 
 ## Common build failures
 

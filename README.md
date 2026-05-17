@@ -135,7 +135,8 @@ Bounds: max **8 model turns**, max **90 seconds** wall clock, fully cancellable 
 | **MCP client** — stdio + Streamable HTTP transports, schema linter, per-tool policies | ✅ shipping |
 | **Astra as an MCP server** — Claude Code / Codex / Cursor call into the dock for screen capture + approvals | ✅ shipping |
 | **Connector cookbook** — vetted configs for GitHub / Notion / Sentry / Stripe / Linear / Slack / Filesystem / SQLite / Postgres / Playwright / Claude Code / Gmail / Calendar | ✅ shipping |
-| Signed `.dmg` distribution | 🔜 planned |
+| **`.dmg` distribution path** — electron-builder config, hardened-runtime entitlements, notarization hook (Apple Developer credentials still needed for final signing) | ✅ shipping (see [BUILDING.md](BUILDING.md)) |
+| Auto-update via `electron-updater` | 🔜 planned (manifest + ZIPs already emit) |
 | Windows / Linux builds | 🔜 evaluating |
 
 ---

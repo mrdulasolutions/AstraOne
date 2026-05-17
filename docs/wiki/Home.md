@@ -8,7 +8,8 @@
 - **[Agent Mode](Agent-Mode)** — how the tool-call loop works, approvals, audit log
 - **[MCP Servers](MCP-Servers)** — connect remote MCPs (URL + bearer) or local stdio MCPs (Claude Code, filesystem, sqlite)
 - **[Architecture](Architecture)** — main / preload / renderer split, registry / router / providers
-- **[Connectors](Connectors)** — recommended MCP servers + config snippets *(PR-E)*
+- **[Connectors](Connectors)** — vetted configs for GitHub / Notion / Sentry / Stripe / Linear / Slack / Filesystem / SQLite / Postgres / Playwright / Claude Code / Gmail / Calendar
+- **[Building](Building)** — packaging Astra Dock into a `.dmg` (signed + notarized for production, unsigned for local test)
 - **[FAQ](FAQ)** — common errors, security notes, troubleshooting
 
 ## Source of truth

@@ -5,3 +5,7 @@ out/
 .DS_Store
 .env
 .env.*
+
+# Intermediate icon artifacts (only icon.icns is the source of truth)
+build/icon-1024.png
+build/icon.iconset/

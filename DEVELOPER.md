@@ -379,14 +379,18 @@ The Astra Dock SVG logo lives at `src/renderer/assets/astra-dock.svg`. The wordm
 
 ## Build / distribution
 
-Distribution tooling is **not yet wired up**. A typical Electron production setup would add:
+Distribution is wired up via **electron-builder**. See [`BUILDING.md`](BUILDING.md) for the full guide. TL;DR:
 
-- `electron-builder` or `electron-forge` for `.dmg` / `.zip` packaging
-- A `Developer ID Application` certificate for code signing
-- A notarization step (`notarytool`) for Gatekeeper acceptance
-- An auto-update mechanism (e.g. `electron-updater` with `update.electronjs.org`)
+```bash
+npm run dist:unsigned   # local test build (DMG + ZIP for arm64 + x64, ~100 MB each)
+npm run dist            # signed build (requires Developer ID Application cert in Keychain)
+APPLE_ID=... APPLE_APP_SPECIFIC_PASSWORD=... APPLE_TEAM_ID=... npm run dist
+                        # signed + notarized, the production path
+```
 
-When this is set up, document the release process here.
+Artifacts land in `dist/`. `build/entitlements.mac.plist` enumerates the hardened-runtime entitlements we request (JIT, unsigned-exec memory, library-validation-off for spawning unsigned MCP children, network client, mic). `build/notarize.cjs` is the `afterSign` hook — it no-ops when the Apple env vars are unset, so unsigned local builds still work.
+
+Auto-update is not yet wired but the build config emits `latest-mac.yml` + ZIPs ready for `electron-updater`.
 
 ## Common gotchas
 

@@ -22,17 +22,110 @@
     "start": "electron .",
     "dev": "electron .",
     "check:licenses": "node scripts/check-licenses.mjs",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:unsigned": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config.mac.identity=null",
+    "dist:arm64": "electron-builder --mac --arm64",
+    "dist:x64": "electron-builder --mac --x64",
+    "dist:universal": "electron-builder --mac --universal"
   },
   "engines": {
     "node": ">=20"
   },
   "devDependencies": {
+    "@electron/notarize": "^2.5.0",
     "electron": "^34.0.0",
+    "electron-builder": "^26.8.1",
     "license-checker": "^25.0.1"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",
     "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "build": {
+    "appId": "com.mrdulasolutions.astra-dock",
+    "productName": "Astra Dock",
+    "copyright": "Copyright © 2026 MR Dula Solutions, a DBA of MR Dula Enterprise, LLC. All Rights Reserved.",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "node_modules/**/*",
+      "package.json",
+      "LICENSE",
+      "NOTICE.md",
+      "!**/*.{md,markdown,txt}",
+      "!**/{test,tests,__tests__,spec,specs,examples,example,docs}/**",
+      "!**/{.git,.github,.gitignore,.npmignore,.travis.yml,.eslintrc*,.prettierrc*}",
+      "!**/CHANGELOG*",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "LICENSE",
+        "to": "LICENSE.txt"
+      },
+      {
+        "from": "NOTICE.md",
+        "to": "NOTICE.md"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "minimumSystemVersion": "13.0",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Astra Dock uses your microphone for voice prompts (Speech-to-text via ElevenLabs Scribe).",
+        "NSScreenCaptureUsageDescription": "Astra Dock captures your screen or active window so it can answer questions about what you're looking at. Captures stay in RAM and can be wiped instantly with Panic.",
+        "NSAppleEventsUsageDescription": "Astra Dock requests Apple Events access only when an MCP integration explicitly needs it. Disabled by default."
+      },
+      "notarize": false
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "icon": "build/icon.icns",
+      "iconSize": 96,
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 200
+        },
+        {
+          "x": 400,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "background": null
+    },
+    "afterSign": "build/notarize.cjs"
   }
 }

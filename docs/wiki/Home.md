@@ -1,5 +1,9 @@
 # Astra Dock — Wiki
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/mrdulasolutions/AstraOne/main/src/renderer/assets/astra-dock-bar.svg" alt="Astra Dock — the floating pill HUD" width="900" />
+</p>
+
 **Astra Dock** is the persistent visual command bar for every agent, every app, and every connector on your machine. A product of **Astra One** by [MR Dula Solutions](https://github.com/mrdulasolutions).
 
 ## Pages

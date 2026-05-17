@@ -1,8 +1,12 @@
 # Astra Dock
 
+<p align="center">
+  <img src="src/renderer/assets/astra-dock-bar.svg" alt="Astra Dock — the floating pill HUD" width="900" />
+</p>
+
 > Your screen-aware AI assistant, one keystroke away.
 
-**Astra Dock** is a translucent macOS HUD that floats above every app, captures what you're looking at, and answers questions about it through any model on OpenRouter — no copy-pasting, no app-switching, no friction.
+**Astra Dock** is a translucent macOS HUD that floats above every app, captures what you're looking at, and answers questions about it through any model on OpenRouter, Anthropic, or OpenAI — no copy-pasting, no app-switching, no friction.
 
 A product of **Astra One** by [MR Dula Solutions](#about), a DBA of MR Dula Enterprise, LLC.
 
